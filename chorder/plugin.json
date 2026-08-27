@@ -1,9 +1,9 @@
 {
-  "id": "my-plugin",
-  "name": "My Plugin",
+  "id": "chorder",
+  "name": "Chorder",
   "version": "0.1.0",
-  "description": "A feedBack plugin template with screen, settings, and server routes.",
-  "type": "visualization",
+  "description": "Chord names and diagrams generated from chart data, shown over the lyrics.",
+  "category": "practice",
   "script": "screen.js",
   "scriptType": "classic",
   "styles": "assets/plugin.css",
@@ -12,6 +12,6 @@
     "category": "custom"
   },
   "routes": "routes.py",
-  "icon": "🎨",
+  "icon": "🎸",
   "minHost": "1.0.0"
 }

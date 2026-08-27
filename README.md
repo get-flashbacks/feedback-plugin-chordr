@@ -1,6 +1,16 @@
-# feedBack Plugin Template
+# chorder
 
-A reference template for creating [feedBack plugins](https://github.com/got-feedBack/feedback-plugin-spec).
+A feedBack plugin: chord names and diagrams generated from chart data,
+shown over the lyrics. Built from the
+[feedBack plugin template](https://github.com/got-feedBack/feedback-plugin-spec).
+
+See [`chorder/README.md`](chorder/README.md) for the plugin itself and its
+tracked work.
+
+---
+
+The rest of this file is the original template documentation, kept for
+reference on the plugin-authoring conventions this repo follows.
 
 ## ⚠️ DISCLAIMER AND WARRANTY
 
@@ -19,7 +29,7 @@ A reference template for creating [feedBack plugins](https://github.com/got-feed
 
 ## Quick start
 
-1. **Copy the template:** Duplicate the `my-plugin/` directory and rename it to your plugin's `id`.
+1. **Copy the template:** Duplicate the `my-plugin/` directory and rename it to your plugin's `id`. (Already done in this repo: the plugin lives in `chorder/`.)
    ```bash
    cp -r my-plugin your-plugin
    ```
