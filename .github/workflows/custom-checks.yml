@@ -28,7 +28,4 @@ jobs:
   checks:
     uses: get-flashbacks/.github/.github/workflows/custom-checks.yml@main
     with:
-      # my-plugin/ is this template's example plugin folder. If you copied
-      # it to a differently-named folder (per the README's rename step),
-      # update this path to match — it must equal your plugin.json's "id".
-      plugin-dir: my-plugin
+      plugin-dir: chorder
