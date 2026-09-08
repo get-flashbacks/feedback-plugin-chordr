@@ -208,3 +208,76 @@ test('baseOpenStringMidis uses the bass base for a 4-string bass but the 6-strin
     assert.deepEqual(bassBase, [28, 33, 38, 43]);
     assert.deepEqual(guitarVoicingBase, [40, 45, 50, 55, 59, 64]);
 });
+
+// ── Real wire-format input ──────────────────────────────────────────────
+// feedpak-spec §6.2/§6.3 and lib/song.py's note_to_wire/chord_note_to_wire
+// serialize chord notes as { s, f }, not { string, fret } — the highway
+// `chords` WS payload and highway_3d both read cn.s/cn.f. identifyChord
+// must accept that real shape, not just the more readable one tests
+// elsewhere in this file construct by hand.
+
+test('identifies an open C major chord from real wire-shaped notes ({s, f})', () => {
+    const chorder = freshPlugin();
+    const chord = [
+        { s: 1, f: 3 },
+        { s: 2, f: 2 },
+        { s: 3, f: 0 },
+        { s: 4, f: 1 },
+        { s: 5, f: 0 },
+    ];
+    const result = chorder.identifyChord(chord, { tuning: STD_TUNING, capo: 0, stringCount: 6 });
+    assert.ok(result);
+    assert.equal(result.rootName, 'C');
+    assert.equal(result.quality, '');
+});
+
+test('identifyChord tolerates a mix of {s, f} and {string, fret} notes in the same chord', () => {
+    const chorder = freshPlugin();
+    const chord = [
+        { s: 1, f: 3 },
+        { string: 2, fret: 2 },
+        { s: 3, f: 0 },
+        { string: 4, fret: 1 },
+        { s: 5, f: 0 },
+    ];
+    const result = chorder.identifyChord(chord, { tuning: STD_TUNING, capo: 0, stringCount: 6 });
+    assert.ok(result);
+    assert.equal(result.rootName, 'C');
+});
+
+test('pitchFromBase rejects a note missing both s/f and string/fret instead of vacuously passing the range guard', () => {
+    const chorder = freshPlugin();
+    // NaN compares false against every bound, so a naive `string < 0 ||
+    // string >= tuning.length` guard alone would silently let this through
+    // and misattribute the note to the highest string's base pitch.
+    const base = chorder.baseOpenStringMidis(6, false);
+    const result = chorder.pitchFromBase(base, 0, STD_TUNING, undefined, undefined);
+    assert.equal(result, null);
+});
+
+// ── Bass detection via arrangement_smart_name ───────────────────────────
+
+test('identifyFromHighway detects bass via arrangement_smart_name even when the raw arrangement name omits "bass"', () => {
+    const chorder = freshPlugin();
+    const fakeHighway = {
+        getSongInfo: () => ({
+            tuning: [0, 0, 0, 0],
+            capo: 0,
+            arrangement: 'Low End',              // doesn't literally say "bass"
+            arrangement_smart_name: 'Bonus Bass', // host-computed label does
+        }),
+        getStringCount: () => 4,
+    };
+    // Open low string (E) + a perfect 5th above (B, 2nd fret of the A
+    // string) on a 4-string bass reads as E5; on a guitar-voicing
+    // (6-string) base the same string/fret pair would resolve to entirely
+    // different pitches.
+    const chord = [
+        { s: 0, f: 0 },
+        { s: 1, f: 2 },
+    ];
+    const result = chorder.identifyFromHighway(chord, fakeHighway);
+    assert.ok(result);
+    assert.equal(result.rootName, 'E');
+    assert.equal(result.quality, '5');
+});

@@ -52,11 +52,18 @@ if (!window[`__${PLUGIN_ID}_installed`]) {
   // pitch_from_base, which this mirrors. Returns null when `string` has no
   // tuning/base entry.
   function pitchFromBase(base, capo, tuning, string, fret) {
-    if (!base || !base.length || !tuning || string < 0 || string >= tuning.length) {
+    // Number.isInteger(NaN) is false, so a caller passing an undefined/
+    // malformed string or fret (e.g. reading the wrong property name off a
+    // note object) is rejected here explicitly, rather than `string < 0 ||
+    // string >= tuning.length` silently passing — NaN compares false
+    // against everything, so that range check alone would vacuously pass
+    // and misattribute the note to whatever `base[base.length - 1]` is.
+    if (!base || !base.length || !tuning || !Number.isInteger(string) ||
+        string < 0 || string >= tuning.length || !Number.isFinite(fret)) {
       return null;
     }
     const root = string < base.length ? base[string] : base[base.length - 1];
-    return root + Number(tuning[string] || 0) + Number(capo || 0) + Number(fret || 0);
+    return root + Number(tuning[string] || 0) + Number(capo || 0) + fret;
   }
 
   function noteName(pitchClass, useFlats) {
@@ -140,9 +147,14 @@ if (!window[`__${PLUGIN_ID}_installed`]) {
   }
 
   /**
-   * Identify a chord from chart-shaped chord notes (the wire format's
-   * `chord.notes`: [{ string, fret }, ...]) plus the arrangement's tuning
-   * context. `ctx.tuning` is the per-string OFFSET array (same shape as
+   * Identify a chord from chart-shaped chord notes plus the arrangement's
+   * tuning context. Accepts the real wire format's `chord.notes`
+   * (feedpak-spec §6.2/§6.3, e.g. `lib/song.py`'s `note_to_wire`/
+   * `chord_note_to_wire`, and what the highway `chords` WS payload and
+   * `highway_3d` actually read): `[{ s, f }, ...]`. Also tolerates the more
+   * readable `{ string, fret }` shape for callers constructing notes by
+   * hand (tests, other call sites) — `s`/`f` win when both are present.
+   * `ctx.tuning` is the per-string OFFSET array (same shape as
    * bundle/songInfo.tuning), `ctx.capo` a fret count, `ctx.stringCount` the
    * active arrangement's string count (bundle.stringCount, feedBack#93 —
    * never derive from tuning.length, see lib/song.py's own warning),
@@ -162,7 +174,9 @@ if (!window[`__${PLUGIN_ID}_installed`]) {
 
     const midis = [];
     for (const n of chordNotes) {
-      const midi = pitchFromBase(base, capo, tuning, n.string, n.fret);
+      const string = Number(n.s ?? n.string);
+      const fret = Number(n.f ?? n.fret);
+      const midi = pitchFromBase(base, capo, tuning, string, fret);
       if (midi !== null) midis.push(midi);
     }
     if (midis.length === 0) return null;
@@ -193,7 +207,11 @@ if (!window[`__${PLUGIN_ID}_installed`]) {
     }
     const songInfo = hw.getSongInfo() || {};
     const stringCount = typeof hw.getStringCount === "function" ? hw.getStringCount() : undefined;
-    const isBass = /bass/i.test(songInfo.arrangement || "");
+    // Check arrangement_smart_name too, not just the raw name: it's the
+    // host-computed label (lib/song.py's arrangement_is_bass, derived from
+    // type/path_bass/name) and catches a bass chart whose raw name doesn't
+    // literally contain "bass" — a case core explicitly handles.
+    const isBass = /bass/i.test(`${songInfo.arrangement || ""} ${songInfo.arrangement_smart_name || ""}`);
     return identifyChord(chordNotes, {
       tuning: songInfo.tuning,
       capo: songInfo.capo,

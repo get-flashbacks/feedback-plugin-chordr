@@ -24,7 +24,9 @@ exposing `window._ddCapabilities`).
 ## `window.chorder` API
 
 ```js
-// From chart-shaped chord notes (the wire format's chord.notes):
+// From chart-shaped chord notes — accepts the real wire format's
+// chord.notes ([{ s, f }, ...], feedpak-spec §6.2/§6.3), and also
+// tolerates the more readable { string, fret } shape:
 window.chorder.identifyChord(chordNotes, {
   tuning,       // per-string OFFSET array, same shape as songInfo.tuning
   capo,         // fret count
@@ -58,7 +60,7 @@ elsewhere in the app.
 ## Tests
 
 ```bash
-node --test tests/
+node tests/chord_analysis.test.js
 ```
 
 ## License
