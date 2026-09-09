@@ -1,3 +1,4 @@
+(() => {
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
 // Chordr: derives chord names/shapes from raw chart data (fret/string or
@@ -186,4 +187,5 @@ if (!window[`__${PLUGIN_ID}_installed`]) {
     noteName,
     CHORD_QUALITIES,
   };
-}
+  }
+})();
