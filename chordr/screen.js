@@ -146,6 +146,7 @@ if (!window[`__${PLUGIN_ID}_installed`]) {
 
     const midis = [];
     for (const n of chordNotes) {
+      if (!n || typeof n !== 'object') continue;
       const string = Number(n.s ?? n.string);
       const fret = Number(n.f ?? n.fret);
       const midi = pitchFromBase(base, capo, tuning, string, fret);
