@@ -18,35 +18,25 @@ Scope of this plugin (tracked as separate issues, roughly in dependency order):
    there's no chart data to read at all.
 
 No screen/UI yet — `plugin.json` declares no `screen`, so this currently
-runs as a background library only (same pattern as `difficulty_ladder`
-exposing `window._ddCapabilities`).
+runs as a background library only.
 
 ## `window.chordr` API
 
 ```js
-// From chart-shaped chord notes — accepts the real wire format's
-// chord.notes ([{ s, f }, ...], feedpak-spec §6.2/§6.3), and also
-// tolerates the more readable { string, fret } shape:
 window.chordr.identifyChord(chordNotes, {
   tuning,
   capo,
   stringCount,
   isBass,
 });
-// => { root, rootName, quality, name, bass, displayName, pitchClasses } | null
-
 window.chordr.identifyPianoChord(midiNotes);
 window.chordr.identifyFromHighway(chordNotes, highway);
 ```
 
-`identifyChord`/`identifyPianoChord` return `null` when there are fewer than
-2 distinct pitch classes, or the pitch-class set doesn't exactly match any
-entry in the internal chord-quality table. See `CHORD_QUALITIES` in
+`identifyChord` accepts the real chart wire shape `[{ s, f }, ...]` and also
+tolerates `{ string, fret }` objects. It returns `null` when the pitch-class
+set does not match a supported chord quality. See `CHORD_QUALITIES` in
 `chordr/screen.js`.
-
-Pitch math (`baseOpenStringMidis`/`pitchFromBase`) mirrors
-`lib/song.py`'s `base_open_string_midis`/`pitch_from_base` and
-`static/js/tuning-display.js`'s `_TUNING_BASE_MIDI` in feedBack core.
 
 ## Tests
 
