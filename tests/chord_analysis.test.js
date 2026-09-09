@@ -2,12 +2,6 @@
 // Coverage for chordr#1's chord-identification algorithm (window.chordr).
 // screen.js installs itself onto `global.window` with no DOM dependency, so
 // tests just stub `window` before requiring and read the API off it.
-// Runs under the org reusable CI as `node tests/chord_analysis.test.js`.
-//
-// String indexing follows lib/song.py / static/js/tuning-display.js's
-// _TUNING_BASE_MIDI convention: index 0 = lowest string (low E on a
-// standard 6-string), index 5 = highest (high e). Chord shapes below are
-// written low-string-to-high-string to match.
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('node:path');
@@ -20,13 +14,9 @@ function freshPlugin() {
     return global.window.chordr;
 }
 
-// Standard 6-string guitar, no tuning offsets / capo.
 const STD_TUNING = [0, 0, 0, 0, 0, 0];
 
 test('installs idempotently onto window.chordr', () => {
-    // Simulate the Host re-executing screen.js on plugin reload: the same
-    // `window` object persists, so __chordr_installed must gate the second
-    // run and leave the original API object in place (not a fresh replacement).
     global.window = {};
     const file = path.join(__dirname, '..', 'chordr', 'screen.js');
     delete require.cache[require.resolve(file)];
@@ -36,7 +26,7 @@ test('installs idempotently onto window.chordr', () => {
     delete require.cache[require.resolve(file)];
     require(file);
 
-    assert.equal(global.window.chordr, first, 'a second install must not replace the API object (guarded by __chordr_installed)');
+    assert.equal(global.window.chordr, first, 'a second install must not replace the API object');
 });
 
 test('identifies an open C major chord (x32010)', () => {
@@ -131,8 +121,7 @@ test('respects per-string tuning offsets (drop D)', () => {
 
 test('returns null for a single note (no chord)', () => {
     const chordr = freshPlugin();
-    const result = chordr.identifyChord([{ string: 0, fret: 0 }], { tuning: STD_TUNING, stringCount: 6 });
-    assert.equal(result, null);
+    assert.equal(chordr.identifyChord([{ string: 0, fret: 0 }], { tuning: STD_TUNING, stringCount: 6 }), null);
 });
 
 test('returns null for empty/invalid input', () => {
@@ -148,8 +137,7 @@ test('returns null for an unidentifiable dissonant cluster', () => {
         { string: 1, fret: 4 },
         { string: 1, fret: 5 },
     ];
-    const result = chordr.identifyChord(chord, { tuning: STD_TUNING, stringCount: 6 });
-    assert.equal(result, null);
+    assert.equal(chordr.identifyChord(chord, { tuning: STD_TUNING, stringCount: 6 }), null);
 });
 
 test('identifyPianoChord identifies chords from raw MIDI numbers', () => {
@@ -195,10 +183,8 @@ test('identifyFromHighway reads tuning/capo/stringCount off a live highway', () 
 
 test('baseOpenStringMidis uses the bass base for a 4-string bass but the 6-string base for a 4-string guitar voicing', () => {
     const chordr = freshPlugin();
-    const bassBase = chordr.baseOpenStringMidis(4, true);
-    const guitarVoicingBase = chordr.baseOpenStringMidis(4, false);
-    assert.deepEqual(bassBase, [28, 33, 38, 43]);
-    assert.deepEqual(guitarVoicingBase, [40, 45, 50, 55, 59, 64]);
+    assert.deepEqual(chordr.baseOpenStringMidis(4, true), [28, 33, 38, 43]);
+    assert.deepEqual(chordr.baseOpenStringMidis(4, false), [40, 45, 50, 55, 59, 64]);
 });
 
 test('identifies an open C major chord from real wire-shaped notes ({s, f})', () => {
@@ -233,8 +219,7 @@ test('identifyChord tolerates a mix of {s, f} and {string, fret} notes in the sa
 test('pitchFromBase rejects a note missing both s/f and string/fret instead of vacuously passing the range guard', () => {
     const chordr = freshPlugin();
     const base = chordr.baseOpenStringMidis(6, false);
-    const result = chordr.pitchFromBase(base, 0, STD_TUNING, undefined, undefined);
-    assert.equal(result, null);
+    assert.equal(chordr.pitchFromBase(base, 0, STD_TUNING, undefined, undefined), null);
 });
 
 test('identifyFromHighway detects bass via arrangement_smart_name even when the raw arrangement name omits "bass"', () => {
