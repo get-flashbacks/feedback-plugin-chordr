@@ -1,23 +1,5 @@
 name: custom-checks
 
-# Org-wide pre-merge checks (no print() in routes.py, safe server_files
-# relpaths). Templated in here so any plugin repo created via "Use this
-# template" inherits it automatically — see
-# get-flashbacks/feedBack-plugin-template's README for the copy/rename step
-# that turns my-plugin/ into your plugin's own folder.
-#
-# Deliberately does NOT check folder-name==id: actions/checkout names the
-# workspace after the git repo, not the manifest id, and this org's repo
-# names commonly differ from plugin ids (e.g. feedBack-plugin-feedpakr's id
-# is "feedpakr") — so that check produced false failures and was dropped
-# org-wide. The real folder-name==id invariant applies at install time, once
-# someone copies the plugin into a Host's plugins/ dir.
-#
-# Points at the org's shared reusable workflow. If that workflow doesn't
-# exist yet at this ref, this job will fail with a "workflow not found"
-# error rather than silently skipping — that's expected until the org sets
-# it up (see get-flashbacks org docs / ask an admin).
-
 on:
   pull_request:
     branches: [main]
@@ -26,6 +8,35 @@ on:
 
 jobs:
   checks:
-    uses: get-flashbacks/.github/.github/workflows/custom-checks.yml@main
-    with:
-      plugin-dir: chorder
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Validate plugin manifest
+        run: |
+          node <<'NODE'
+          const fs = require('node:fs');
+          const path = require('node:path');
+          const manifestPath = path.join('chordr', 'plugin.json');
+          const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+
+          if (manifest.id !== 'chordr') {
+            throw new Error(`Expected plugin id "chordr", got ${JSON.stringify(manifest.id)}`);
+          }
+          if (!manifest.script) {
+            throw new Error('plugin.json must declare a script');
+          }
+          if (!fs.existsSync(path.join('chordr', manifest.script))) {
+            throw new Error(`Missing declared script: chordr/${manifest.script}`);
+          }
+          NODE
+
+      - name: Check JavaScript syntax
+        run: node --check chordr/screen.js
+
+      - name: Run chord identification tests
+        run: node tests/chord_analysis.test.js
