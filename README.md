@@ -28,34 +28,25 @@ exposing `window._ddCapabilities`).
 // chord.notes ([{ s, f }, ...], feedpak-spec §6.2/§6.3), and also
 // tolerates the more readable { string, fret } shape:
 window.chordr.identifyChord(chordNotes, {
-  tuning,       // per-string OFFSET array, same shape as songInfo.tuning
-  capo,         // fret count
-  stringCount,  // bundle.stringCount (feedBack#93) — prefer this over tuning.length
-  isBass,       // bool
+  tuning,
+  capo,
+  stringCount,
+  isBass,
 });
 // => { root, rootName, quality, name, bass, displayName, pitchClasses } | null
 
-// From raw piano MIDI note numbers:
 window.chordr.identifyPianoChord(midiNotes);
-
-// Convenience: pulls tuning/capo/stringCount off a live highway instance
-// (defaults to `window.highway` if none is passed).
 window.chordr.identifyFromHighway(chordNotes, highway);
 ```
 
 `identifyChord`/`identifyPianoChord` return `null` when there are fewer than
 2 distinct pitch classes, or the pitch-class set doesn't exactly match any
-entry in the internal chord-quality table (major/minor/7th/sus/dim/aug/6/9/
-etc. — see `CHORD_QUALITIES` in `chordr/screen.js`) from any candidate root.
-The bass note is tried as the root first (the common case); if no quality
-matches with the bass as root but one does with another chord tone as root,
-the result carries `bass` + a slash-chord `displayName` (e.g. `"C/E"`).
+entry in the internal chord-quality table. See `CHORD_QUALITIES` in
+`chordr/screen.js`.
 
 Pitch math (`baseOpenStringMidis`/`pitchFromBase`) mirrors
 `lib/song.py`'s `base_open_string_midis`/`pitch_from_base` and
-`static/js/tuning-display.js`'s `_TUNING_BASE_MIDI` in feedBack core, so a
-derived chord root always agrees with the tuner and open-string labels
-elsewhere in the app.
+`static/js/tuning-display.js`'s `_TUNING_BASE_MIDI` in feedBack core.
 
 ## Tests
 
