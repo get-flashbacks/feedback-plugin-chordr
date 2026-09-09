@@ -11,11 +11,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-
       - name: Validate plugin manifest
         run: |
           node <<'NODE'
@@ -23,20 +21,11 @@ jobs:
           const path = require('node:path');
           const manifestPath = path.join('chordr', 'plugin.json');
           const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
-
-          if (manifest.id !== 'chordr') {
-            throw new Error(`Expected plugin id "chordr", got ${JSON.stringify(manifest.id)}`);
-          }
-          if (!manifest.script) {
-            throw new Error('plugin.json must declare a script');
-          }
-          if (!fs.existsSync(path.join('chordr', manifest.script))) {
-            throw new Error(`Missing declared script: chordr/${manifest.script}`);
-          }
+          if (manifest.id !== 'chordr') throw new Error(`Expected plugin id "chordr", got ${JSON.stringify(manifest.id)}`);
+          if (!manifest.script) throw new Error('plugin.json must declare a script');
+          if (!fs.existsSync(path.join('chordr', manifest.script))) throw new Error(`Missing declared script: chordr/${manifest.script}`);
           NODE
-
       - name: Check JavaScript syntax
         run: node --check chordr/screen.js
-
       - name: Run chord identification tests
         run: node tests/chord_analysis.test.js
