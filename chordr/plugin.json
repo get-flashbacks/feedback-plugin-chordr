@@ -1,0 +1,11 @@
+{
+  "id": "chordr",
+  "name": "Chordr",
+  "version": "0.1.0",
+  "description": "Derives chord names and shapes from chart data for guitar and piano arrangements — a shared capability other plugins consume rather than duplicating chord logic themselves.",
+  "category": "tools",
+  "icon": "🎼",
+  "script": "screen.js",
+  "scriptType": "classic",
+  "minHost": "1.0.0"
+}
