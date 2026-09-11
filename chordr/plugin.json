@@ -1,12 +1,20 @@
 {
   "id": "chordr",
   "name": "Chordr",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Derives chord names and shapes from chart data for guitar and piano arrangements — a shared capability other plugins consume rather than duplicating chord logic themselves.",
   "category": "tools",
   "type": "utility",
   "icon": "🎼",
   "script": "screen.js",
   "scriptType": "classic",
-  "minHost": "1.0.0"
+  "minHost": "1.0.0",
+  "standards": ["capability-pipelines.v1"],
+  "capabilities": {
+    "chart-transform": {
+      "provides": true,
+      "label": "Chordr — auto-generated chord diagrams",
+      "description": "Fills in missing chord diagram templates (placeholder -1 frets) by deriving fret/string shapes and names from chart note data."
+    }
+  }
 }
