@@ -85,7 +85,7 @@ test('registers a chart-transform provider on load when window.feedBack.capabili
         dispatch(msg) {
             calls.push(msg);
             if (msg.command === 'inspect') {
-                return Promise.resolve({ data: { active: null } });
+                return Promise.resolve({ payload: { active: null } });
             }
             return Promise.resolve({ ok: true });
         },
@@ -114,7 +114,7 @@ test('does not select itself as the chart-transform provider when one is already
         dispatch(msg) {
             calls.push(msg);
             if (msg.command === 'inspect') {
-                return Promise.resolve({ data: { active: 'some_other_provider' } });
+                return Promise.resolve({ payload: { active: 'some_other_provider' } });
             }
             return Promise.resolve({ ok: true });
         },

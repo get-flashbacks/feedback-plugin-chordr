@@ -298,7 +298,7 @@ if (!window[`__${PLUGIN_ID}_installed`]) {
         // sensible default when nothing is active yet (mirrors how
         // register-provider itself only auto-restores a persisted
         // selection for THIS exact provider id, never forces one).
-        const snapshot = (result && (result.data || result)) || {};
+        const snapshot = (result && (result.payload || result)) || {};
         if (!snapshot.active) {
           return api.dispatch({
             capability: "chart-transform", command: "select-provider",

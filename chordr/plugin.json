@@ -12,8 +12,13 @@
   "standards": ["capability-pipelines.v1"],
   "capabilities": {
     "chart-transform": {
-      "provides": true,
-      "label": "Chordr — auto-generated chord diagrams",
+      "roles": ["provider"],
+      "operations": ["chart.transform"],
+      "mode": "active",
+      "compatibility": "none",
+      "ownership": "multi-provider",
+      "safety": "safe",
+      "version": 1,
       "description": "Fills in missing chord diagram templates (placeholder -1 frets) by deriving fret/string shapes and names from chart note data."
     }
   }
