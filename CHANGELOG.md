@@ -7,4 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Auto-generate chord diagrams for chords whose chart data carries no
+  usable template (missing, or GP-import placeholder all `-1` frets) —
+  `window.chordr.generateChordTemplates()` derives a fret/string shape
+  from the chord's chart notes and a name via chord identification.
+  Registered as a `chart-transform` provider (feedBack#952) so any
+  renderer reading `highway.getChordTemplates()` picks up the generated
+  diagrams automatically. (#2)
+
 <!-- Add entries under Added, Changed, Deprecated, Removed, Fixed, or Security as changes land. -->

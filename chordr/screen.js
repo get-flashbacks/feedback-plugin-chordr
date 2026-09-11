@@ -178,10 +178,147 @@ if (!window[`__${PLUGIN_ID}_installed`]) {
     });
   }
 
+  // ── Auto-generated chord diagrams (chordr#2) ─────────────────────────────
+  //
+  // A chord_templates entry is "no real diagram" (RS2014-import convention,
+  // documented in core CLAUDE.md's overlay-contract section) when it's
+  // missing outright, or its `frets` are all -1 (the placeholder GP imports
+  // already emit when the source has no fingering data). Either case is
+  // filled in here from the chord event's OWN {s,f} notes — that's the
+  // physical shape actually played, independent of whether identifyChord
+  // can name it — plus a best-effort name when it can.
+
+  function _templateNeedsGeneration(tpl) {
+    if (!tpl || typeof tpl !== "object") return true;
+    if (!Array.isArray(tpl.frets) || tpl.frets.length === 0) return true;
+    return tpl.frets.every((f) => Number(f) === -1);
+  }
+
+  // Builds the per-string shape straight from the chord's own notes — no
+  // chord-quality matching involved, so it's exact even for a shape
+  // identifyChord can't name (an unsupported quality, an added tension).
+  // `fingers` has no source in raw chart data (same as GP imports, see
+  // core CLAUDE.md: "GP imports currently emit all -1 since pre-import
+  // sources don't carry finger data") so it's left as the same sentinel.
+  function _shapeFromChordNotes(chordNotes, stringCount) {
+    const n = Math.max(1, Number(stringCount) || 6);
+    const frets = new Array(n).fill(-1);
+    const fingers = new Array(n).fill(-1);
+    for (const note of chordNotes || []) {
+      if (!note || typeof note !== "object") continue;
+      const s = Number(note.s ?? note.string);
+      const f = Number(note.f ?? note.fret);
+      if (!Number.isFinite(s) || !Number.isFinite(f) || s < 0 || s >= n) continue;
+      frets[s] = f;
+    }
+    return { frets, fingers };
+  }
+
+  // `chords` is the raw wire-format array (`{ t, id, notes: [{s,f,...}] }`,
+  // see core's WebSocket protocol reference — `id` indexes `chordTemplates`).
+  // `existingTemplates` may be absent/empty (no chord_templates message at
+  // all) or present-but-incomplete. `ctx` is the same shape identifyChord
+  // takes (tuning, capo, stringCount, isBass). Returns a NEW templates
+  // array with only the deficient entries replaced, or null when nothing
+  // needed generating — callers (e.g. the chart-transform provider below)
+  // use null to mean "leave the chart's chordTemplates alone".
+  function generateChordTemplates(chords, existingTemplates, ctx) {
+    if (!Array.isArray(chords) || chords.length === 0) return null;
+    const options = ctx || {};
+    const stringCount = options.stringCount || (options.tuning && options.tuning.length) || 6;
+    const templates = Array.isArray(existingTemplates) ? existingTemplates.slice() : [];
+    let changed = false;
+
+    for (const chord of chords) {
+      if (!chord || typeof chord !== "object") continue;
+      const id = Number(chord.id);
+      if (!Number.isInteger(id) || id < 0) continue;
+      if (!Array.isArray(chord.notes) || chord.notes.length === 0) continue;
+      if (!_templateNeedsGeneration(templates[id])) continue;
+
+      const shape = _shapeFromChordNotes(chord.notes, stringCount);
+      const identified = identifyChord(chord.notes, options);
+      const existingName = templates[id] && templates[id].name;
+      templates[id] = {
+        name: (identified && identified.displayName) || existingName || "",
+        frets: shape.frets,
+        fingers: shape.fingers,
+      };
+      changed = true;
+    }
+
+    return changed ? templates : null;
+  }
+
+  // Wires the above into core's chart-transform capability (feedBack#952 —
+  // see docs/capability-recipes.md) so generated diagrams actually reach
+  // the highway/overlays via getChordTemplates(), instead of sitting in
+  // this module unused. transform(input) only ever returns a
+  // `chordTemplates` key (or null) — every other chart field is left
+  // untouched, so this coexists with whatever else a transform provider
+  // might otherwise own.
+  function _transformInput(input) {
+    const chords = Array.isArray(input.allChords) ? input.allChords : input.chords;
+    const songInfo = input.songInfo || {};
+    const isBass = /bass/i.test(`${songInfo.arrangement || ""} ${songInfo.arrangement_smart_name || ""}`);
+    const merged = generateChordTemplates(chords, input.chordTemplates, {
+      tuning: songInfo.tuning,
+      capo: songInfo.capo,
+      stringCount: input.stringCount,
+      isBass,
+    });
+    return merged ? { chordTemplates: merged } : null;
+  }
+
+  function _registerChartTransform() {
+    const api = window.feedBack && window.feedBack.capabilities;
+    if (!api || typeof api.dispatch !== "function") return;
+    if (window[`__${PLUGIN_ID}_transformRegistered`]) return;
+    window[`__${PLUGIN_ID}_transformRegistered`] = true;
+
+    const providerId = `${PLUGIN_ID}_diagrams`;
+    api.dispatch({
+      capability: "chart-transform",
+      command: "register-provider",
+      source: providerId,
+      payload: {
+        providerId,
+        label: "Chordr — auto-generated chord diagrams",
+        transform(input) {
+          try {
+            return _transformInput(input || {});
+          } catch (_) {
+            return null; // never let a bad chord shape break rendering
+          }
+        },
+      },
+    }).then(() => api.dispatch({ capability: "chart-transform", command: "inspect", source: providerId }))
+      .then((result) => {
+        // Never steal an existing selection — only self-select as a
+        // sensible default when nothing is active yet (mirrors how
+        // register-provider itself only auto-restores a persisted
+        // selection for THIS exact provider id, never forces one).
+        const snapshot = (result && (result.data || result)) || {};
+        if (!snapshot.active) {
+          return api.dispatch({
+            capability: "chart-transform", command: "select-provider",
+            source: providerId, payload: { providerId },
+          });
+        }
+      })
+      .catch(() => { /* capability graph unavailable — diagrams just won't auto-generate */ });
+  }
+
+  if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
+    if (window.feedBack && window.feedBack.capabilities) _registerChartTransform();
+    else window.addEventListener("feedBack:capabilities:ready", _registerChartTransform, { once: true });
+  }
+
   window.chordr = {
     identifyChord,
     identifyPianoChord,
     identifyFromHighway,
+    generateChordTemplates,
     baseOpenStringMidis,
     pitchFromBase,
     noteName,
