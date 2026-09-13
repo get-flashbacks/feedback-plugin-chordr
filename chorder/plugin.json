@@ -1,7 +1,7 @@
 {
   "id": "chorder",
   "name": "Chorder",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Chord names and diagrams generated from chart data, shown over the lyrics.",
   "category": "practice",
   "script": "screen.js",

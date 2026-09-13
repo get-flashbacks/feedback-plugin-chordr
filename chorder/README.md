@@ -7,11 +7,17 @@ an Ultimate-Guitar-style chord/lyrics view for feedBack.
 
 Early scaffold. Tracked work (see the repo's issues):
 
-1. **Chord generator** (#1) — derive chord names/shapes from `getNotes()` /
-   `getChords()` for charts that don't already carry named chord templates
-   (piano + guitar). The overlay in `chorder/screen.js` already reads
-   `getChordTemplates()` for songs that *do* have named templates; this is
-   the gap-filler for songs that don't.
+1. **Chord generator** (#1) — derive chord names from `getChords()` for
+   charts that don't already carry named chord templates (GP imports and
+   other unnamed sources). Implemented for guitar/bass: `identifyChord()`
+   in `screen.js` builds the pitch-class set a chord's fretted notes
+   produce (from `songInfo.tuning` + `songInfo.capo`) and matches it
+   against a table of chord formulas (triads, 6ths, 7ths, 9ths, sus,
+   add9), picking the richest formula fully contained in the played
+   notes. Falls back to `"?"` when no formula matches or tuning data is
+   unavailable. Piano/keys support is still open — the pitch-class math
+   is instrument-agnostic, but nothing currently supplies fretted
+   `chord.notes` for non-fretted arrangements.
 2. **Auto diagrams** (#2) — the overlay already renders a diagram from
    `template.frets` when present; this issue covers synthesizing frets for
    chords the generator names but the source chart never diagrammed.

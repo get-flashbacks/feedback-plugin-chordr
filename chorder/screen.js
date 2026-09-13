@@ -8,6 +8,77 @@
 
 const PLUGIN_ID = "chorder";
 
+const NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
+
+// Ordered most-specific first: for a given root, the first formula whose
+// intervals are all present in the played pitch-class set wins. This
+// prefers e.g. "7" over "5" when a dominant 7th chord also happens to
+// satisfy the power-chord subset.
+const CHORD_FORMULAS = [
+  { suffix: "maj9", intervals: [0, 4, 7, 11, 2] },
+  { suffix: "m9", intervals: [0, 3, 7, 10, 2] },
+  { suffix: "9", intervals: [0, 4, 7, 10, 2] },
+  { suffix: "maj7", intervals: [0, 4, 7, 11] },
+  { suffix: "m7b5", intervals: [0, 3, 6, 10] },
+  { suffix: "dim7", intervals: [0, 3, 6, 9] },
+  { suffix: "m7", intervals: [0, 3, 7, 10] },
+  { suffix: "7", intervals: [0, 4, 7, 10] },
+  { suffix: "6", intervals: [0, 4, 7, 9] },
+  { suffix: "m6", intervals: [0, 3, 7, 9] },
+  { suffix: "add9", intervals: [0, 4, 7, 2] },
+  { suffix: "sus2", intervals: [0, 2, 7] },
+  { suffix: "sus4", intervals: [0, 5, 7] },
+  { suffix: "aug", intervals: [0, 4, 8] },
+  { suffix: "dim", intervals: [0, 3, 6] },
+  { suffix: "min", intervals: [0, 3, 7] },
+  { suffix: "maj", intervals: [0, 4, 7] },
+  { suffix: "5", intervals: [0, 7] },
+];
+
+// Pitch classes only (mod 12), so it doesn't matter whether `tuning[s]` is
+// stored as an absolute MIDI note or some other octave — the modulo cancels
+// octave entirely, as long as it's indexed the same way as `note.s`.
+function pitchClassesForChord(chord, tuning, capo) {
+  if (!chord || !chord.notes || !tuning) return [];
+  const classes = new Set();
+  for (const n of chord.notes) {
+    const openPitch = tuning[n.s];
+    if (openPitch == null) continue;
+    classes.add((((openPitch + n.f + (capo || 0)) % 12) + 12) % 12);
+  }
+  return Array.from(classes);
+}
+
+// Derives a chord name (e.g. "Cm7") from the pitch-class set a chord's
+// fretted notes produce, when the chart doesn't already carry a named
+// chordTemplate (GP imports and other sources with no authored chord
+// names). Picks, across all candidate roots, the formula that is fully
+// contained in the played set with the fewest leftover (unexplained)
+// tones; ties favor the richer (longer) formula.
+function identifyChord(chord, tuning, capo) {
+  const classes = pitchClassesForChord(chord, tuning, capo);
+  if (classes.length === 0) return null;
+
+  let best = null;
+  for (const root of classes) {
+    const present = new Set(classes.map((c) => (((c - root) % 12) + 12) % 12));
+    for (const formula of CHORD_FORMULAS) {
+      if (!formula.intervals.every((iv) => present.has(iv))) continue;
+      const extra = present.size - formula.intervals.length;
+      if (!best || extra < best.extra || (extra === best.extra && formula.intervals.length > best.size)) {
+        best = { root, suffix: formula.suffix, extra, size: formula.intervals.length };
+      }
+      break; // formulas are ordered most-specific first per root
+    }
+  }
+  if (!best) return null;
+
+  const rootName = NOTE_NAMES[best.root];
+  if (best.suffix === "maj") return rootName;
+  if (best.suffix === "min") return `${rootName}m`;
+  return `${rootName}${best.suffix}`;
+}
+
 if (!window[`__${PLUGIN_ID}_setup`]) {
   window[`__${PLUGIN_ID}_setup`] = true;
   chorderInit();
@@ -23,6 +94,8 @@ function chorderInit() {
     diagramCtx: null,
     lastTime: -1,
     chordCursor: 0,
+    lastChord: undefined,
+    lastChordName: "—",
     settings: { showDiagram: true },
   };
 
@@ -77,6 +150,7 @@ function start(state, btn) {
   buildOverlay(state);
   state.chordCursor = 0;
   state.lastTime = -1;
+  state.lastChord = undefined;
   loop(state);
 
   window.feedBack &&
@@ -141,7 +215,11 @@ function loop(state) {
 
   const chords = highway.getChords ? highway.getChords() : null;
   if (!chords || chords.length === 0) {
-    setChord(state, null, null);
+    if (state.lastChord !== null) {
+      state.lastChord = null;
+      state.lastChordName = "—";
+      setChord(state, "—", null);
+    }
     return;
   }
 
@@ -152,12 +230,29 @@ function loop(state) {
   const chord = chords[i].t <= time ? chords[i] : null;
   const templates = highway.getChordTemplates ? highway.getChordTemplates() : null;
   const template = chord && templates ? templates[chord.id] : null;
-  setChord(state, chord, template);
+
+  // Chord identity only changes when the cursor advances (or resets on a
+  // seek), not every frame — resolve the name/diagram once per chord, not
+  // once per rAF tick.
+  if (chord !== state.lastChord) {
+    state.lastChord = chord;
+    state.lastChordName = resolveChordName(chord, template, highway);
+    setChord(state, state.lastChordName, template);
+  }
 }
 
-function setChord(state, chord, template) {
+function resolveChordName(chord, template, highway) {
+  if (!chord) return "—";
+  if (template && template.name) return template.name;
+
+  const songInfo = highway.getSongInfo ? highway.getSongInfo() : null;
+  const generated = songInfo && songInfo.tuning ? identifyChord(chord, songInfo.tuning, songInfo.capo) : null;
+  return generated || "?";
+}
+
+function setChord(state, name, template) {
   if (!state.nameEl) return;
-  state.nameEl.textContent = template && template.name ? template.name : chord ? "?" : "—";
+  state.nameEl.textContent = name;
 
   if (!state.settings.showDiagram || !state.diagramCtx) return;
   drawDiagram(state.diagramCtx, template);
