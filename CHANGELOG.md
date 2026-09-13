@@ -16,5 +16,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Registered as a `chart-transform` provider (feedBack#952) so any
   renderer reading `highway.getChordTemplates()` picks up the generated
   diagrams automatically. (#2)
+- Ultimate-Guitar-style chord/lyrics view: a player overlay ("🎤
+  Chords+Lyrics" in the v3 player control slot) showing the current
+  lyrics line with chord names positioned above the nearest word, and the
+  already-sung words highlighted. Adds `window.chordr.buildLyricLines()`
+  for parsing the `lyrics` WS message's `-`/`+` word-join/line-break
+  markers. (#3)
 
 <!-- Add entries under Added, Changed, Deprecated, Removed, Fixed, or Security as changes land. -->

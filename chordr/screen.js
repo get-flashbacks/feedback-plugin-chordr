@@ -314,11 +314,256 @@ if (!window[`__${PLUGIN_ID}_installed`]) {
     else window.addEventListener("feedBack:capabilities:ready", _registerChartTransform, { once: true });
   }
 
+  // ── Chord/lyrics view (chordr#3) ─────────────────────────────────────
+  // Ultimate-Guitar-style overlay: shows the current line of lyrics with
+  // chord names positioned above the word nearest each chord's time.
+  // `highway.getChords()`/`getChordTemplates()` already cover chords;
+  // lyrics have no highway getter (see core CLAUDE.md's WS protocol
+  // reference), so this opens its own short-lived WebSocket just for the
+  // `lyrics` message, the same pattern splitscreen's lyrics pane uses.
+
+  // Turns the raw lyrics wire array ([{w,t,d}, ...]) into lines of words,
+  // per the WS protocol: a leading `-` on `w` joins to the previous word
+  // (no space), a trailing `+` ends the current line. Exposed on
+  // `window.chordr` since it's pure and reusable by other lyrics-consuming
+  // plugins, not just this view.
+  function buildLyricLines(lyricsData) {
+    const lines = [];
+    let current = null;
+    for (const entry of lyricsData || []) {
+      if (!entry || typeof entry.w !== "string") continue;
+      let word = entry.w;
+      const joinsPrev = word.startsWith("-");
+      const breaksAfter = word.endsWith("+");
+      if (joinsPrev) word = word.slice(1);
+      if (breaksAfter) word = word.slice(0, -1);
+
+      if (!current) current = { words: [], startT: entry.t };
+      if (joinsPrev && current.words.length) {
+        current.words[current.words.length - 1].text += word;
+      } else {
+        current.words.push({ text: word, t: entry.t });
+      }
+      if (breaksAfter) {
+        current.endT = entry.t + (entry.d || 0);
+        lines.push(current);
+        current = null;
+      }
+    }
+    if (current && current.words.length) {
+      current.endT = current.words[current.words.length - 1].t + 1e9; // open-ended: no trailing "+" ever closed it
+      lines.push(current);
+    }
+    return lines;
+  }
+
+  function _chordDisplayName(chord, template, highway) {
+    if (template && template.name) return template.name;
+    const identified = identifyFromHighway(chord.notes, highway);
+    return (identified && identified.displayName) || null;
+  }
+
+  // Attaches each chord inside [line.startT, line.endT) to the nearest
+  // word at-or-before its time. Returns a Map of word index -> chord name.
+  function _assignChordsToLine(line, chords, templates, highway) {
+    const marks = new Map();
+    for (const chord of chords || []) {
+      if (chord.t < line.startT || chord.t >= line.endT) continue;
+      let idx = 0;
+      for (let i = 0; i < line.words.length; i++) {
+        if (line.words[i].t <= chord.t) idx = i;
+      }
+      const template = templates ? templates[chord.id] : null;
+      const name = _chordDisplayName(chord, template, highway);
+      if (name) marks.set(idx, name);
+    }
+    return marks;
+  }
+
+  function _findLineIndex(lines, time) {
+    for (let i = lines.length - 1; i >= 0; i--) {
+      if (lines[i].startT <= time) return i;
+    }
+    return lines.length ? 0 : -1;
+  }
+
+  function _renderLine(container, line, marks, currentTime) {
+    container.innerHTML = "";
+    line.words.forEach((word, i) => {
+      const wordWrap = document.createElement("span");
+      wordWrap.className = "chordr-word";
+      if (marks.has(i)) {
+        const chordEl = document.createElement("span");
+        chordEl.className = "chordr-chord-label";
+        chordEl.textContent = marks.get(i);
+        wordWrap.appendChild(chordEl);
+      }
+      const textEl = document.createElement("span");
+      textEl.className = "chordr-lyric-text" + (currentTime >= word.t ? " chordr-word-sung" : "");
+      textEl.textContent = word.text + " ";
+      wordWrap.appendChild(textEl);
+      container.appendChild(wordWrap);
+    });
+  }
+
+  const viewState = {
+    active: false,
+    rafId: null,
+    wrap: null,
+    linesEl: null,
+    ws: null,
+    lyricLines: [],
+    lastRenderedLine: -1,
+  };
+
+  function _viewLoop() {
+    if (!viewState.active) return;
+    viewState.rafId = requestAnimationFrame(_viewLoop);
+
+    const highway = window.highway;
+    if (!highway || !highway.getTime || !viewState.lyricLines.length) return;
+
+    const time = highway.getTime();
+    const idx = _findLineIndex(viewState.lyricLines, time);
+    if (idx < 0) return;
+
+    const line = viewState.lyricLines[idx];
+    const chords = highway.getChords ? highway.getChords() : [];
+    const templates = highway.getChordTemplates ? highway.getChordTemplates() : null;
+
+    // Re-render on every frame (not just line changes) so the "sung" word
+    // highlight tracks currentTime within the line.
+    const marks = _assignChordsToLine(line, chords, templates, highway);
+    _renderLine(viewState.linesEl, line, marks, time);
+    viewState.lastRenderedLine = idx;
+  }
+
+  function _connectLyricsSocket(highway) {
+    const songInfo = highway.getSongInfo ? highway.getSongInfo() : null;
+    if (!songInfo || !songInfo.filename || typeof WebSocket === "undefined") return;
+
+    let name = songInfo.filename;
+    try { name = decodeURIComponent(name); } catch (_) { /* already decoded */ }
+    const arrIndex = songInfo.arrangement_index || 0;
+    const scheme = location.protocol === "https:" ? "wss" : "ws";
+    const url = `${scheme}://${location.host}/ws/highway/${encodeURIComponent(name)}?arrangement=${arrIndex}`;
+
+    const ws = new WebSocket(url);
+    ws.onmessage = (event) => {
+      let msg;
+      try { msg = JSON.parse(event.data); } catch (_) { return; }
+      if (msg.type === "lyrics") {
+        viewState.lyricLines = buildLyricLines(msg.data);
+      } else if (msg.type === "ready") {
+        ws.close(); // only needed the lyrics message off this connection
+      }
+    };
+    ws.onerror = () => { /* no lyrics for this song, or a dropped connection — view just stays empty */ };
+    viewState.ws = ws;
+  }
+
+  function _buildViewOverlay() {
+    const player = document.getElementById("player");
+    if (!player) return;
+    const wrap = document.createElement("div");
+    wrap.className = "chordr-view-overlay";
+    const linesEl = document.createElement("div");
+    linesEl.className = "chordr-view-lines";
+    wrap.appendChild(linesEl);
+    player.appendChild(wrap);
+    viewState.wrap = wrap;
+    viewState.linesEl = linesEl;
+  }
+
+  function _startView() {
+    const highway = window.highway;
+    if (!highway) return;
+    viewState.active = true;
+    viewState.lyricLines = [];
+    viewState.lastRenderedLine = -1;
+    _buildViewOverlay();
+    _connectLyricsSocket(highway);
+    _viewLoop();
+  }
+
+  function _stopView(btn) {
+    viewState.active = false;
+    if (btn) btn.classList.remove("chordr-view-active");
+    if (viewState.rafId) cancelAnimationFrame(viewState.rafId);
+    viewState.rafId = null;
+    if (viewState.ws) {
+      viewState.ws.close();
+      viewState.ws = null;
+    }
+    if (viewState.wrap) {
+      viewState.wrap.remove();
+      viewState.wrap = null;
+    }
+  }
+
+  function _toggleView(btn) {
+    if (viewState.active) {
+      _stopView(btn);
+    } else {
+      _startView();
+      if (btn) btn.classList.add("chordr-view-active");
+    }
+  }
+
+  // Reconnect the lyrics socket on every new song while the view is active
+  // — the WS the view opened for the previous song is for the previous
+  // filename/arrangement and won't emit again.
+  function _wrapPlaySongForView() {
+    if (window[`__${PLUGIN_ID}_viewPlaySongWrapped`]) return;
+    if (typeof window.playSong !== "function") return;
+    window[`__${PLUGIN_ID}_viewPlaySongWrapped`] = true;
+    const original = window.playSong;
+    window.playSong = async function (...args) {
+      const result = await original.apply(this, args);
+      if (viewState.active) {
+        if (viewState.ws) {
+          viewState.ws.close();
+          viewState.ws = null;
+        }
+        viewState.lyricLines = [];
+        if (window.highway) _connectLyricsSocket(window.highway);
+      }
+      return result;
+    };
+  }
+
+  function _injectViewToggle() {
+    const build = () => {
+      const container =
+        window.feedBack && window.feedBack.uiVersion === "v3" && window.feedBack.ui
+          ? window.feedBack.ui.playerControlSlot()
+          : null;
+      if (!container) return false;
+      if (container.querySelector("[data-chordr-view-toggle]")) return true;
+
+      const btn = document.createElement("button");
+      btn.setAttribute("data-chordr-view-toggle", "");
+      btn.textContent = "🎤 Chords+Lyrics";
+      btn.className = "fb-text";
+      btn.addEventListener("click", () => _toggleView(btn));
+      container.appendChild(btn);
+      return true;
+    };
+
+    if (!build()) window.addEventListener("feedBack:ui:ready", build, { once: true });
+  }
+
+  if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
+    _injectViewToggle();
+    _wrapPlaySongForView();
+  }
+
   window.chordr = {
     identifyChord,
     identifyPianoChord,
     identifyFromHighway,
     generateChordTemplates,
+    buildLyricLines,
     baseOpenStringMidis,
     pitchFromBase,
     noteName,

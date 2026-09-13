@@ -17,13 +17,15 @@ Scope of this plugin (tracked as separate issues, roughly in dependency order):
    [`chart-transform`](../feedBack/docs/capability-recipes.md#chart-transform-provider)
    provider so any renderer reading `highway.getChordTemplates()` picks up
    the generated diagrams automatically — no per-plugin integration needed.
-3. **Ultimate-Guitar-style chord/lyrics view** (#3).
+3. **Ultimate-Guitar-style chord/lyrics view** (#3, implemented) — a player
+   overlay ("🎤 Chords+Lyrics" in the v3 player control slot) showing the
+   current lyrics line with chord names positioned above the nearest word.
+   Opens its own short-lived WebSocket for the `lyrics` message (the one
+   chart field with no highway getter); chords/templates come from
+   `highway.getChords()`/`getChordTemplates()` as usual.
 4. **ChordPro export** (#4) for that chord/lyrics view.
 5. **Audio-based chord detection** (#5, backlog) as a fallback source when
    there's no chart data to read at all.
-
-No screen/UI yet — `plugin.json` declares no `screen`, so this currently
-runs as a background library only.
 
 ## `window.chordr` API
 
@@ -58,10 +60,18 @@ or `null` if nothing needed generating. This is also what the plugin's
 `chart-transform` provider runs automatically on `song_info`/`chords` —
 see below.
 
+`buildLyricLines(lyricsData)` turns the raw `lyrics` WS message array
+(`[{ w, t, d }, ...]`) into lines of words, honoring the wire format's
+`-` (join to previous word) and `+` (line break) markers. Used internally
+by the chord/lyrics view; exposed since any lyrics-consuming plugin needs
+the same parsing.
+
 ## Tests
 
 ```bash
 node tests/chord_analysis.test.js
+node tests/generate_chord_templates.test.js
+node tests/build_lyric_lines.test.js
 ```
 
 ## License

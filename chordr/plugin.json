@@ -1,13 +1,14 @@
 {
   "id": "chordr",
   "name": "Chordr",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Derives chord names and shapes from chart data for guitar and piano arrangements — a shared capability other plugins consume rather than duplicating chord logic themselves.",
   "category": "tools",
   "type": "utility",
   "icon": "🎼",
   "script": "screen.js",
   "scriptType": "classic",
+  "styles": "assets/plugin.css",
   "minHost": "1.0.0",
   "standards": ["capability-pipelines.v1"],
   "capabilities": {
