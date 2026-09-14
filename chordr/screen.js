@@ -327,7 +327,7 @@ if (!window[`__${PLUGIN_ID}_installed`]) {
   // (no space), a trailing `+` ends the current line. Exposed on
   // `window.chordr` since it's pure and reusable by other lyrics-consuming
   // plugins, not just this view.
-  function buildLyricLines(lyricsData) {
+  const buildLyricLines = (lyricsData) => {
     const lines = [];
     let current = null;
     for (const entry of lyricsData || []) {
@@ -355,17 +355,17 @@ if (!window[`__${PLUGIN_ID}_installed`]) {
       lines.push(current);
     }
     return lines;
-  }
+  };
 
-  function _chordDisplayName(chord, template, highway) {
+  const _chordDisplayName = (chord, template, highway) => {
     if (template && template.name) return template.name;
     const identified = identifyFromHighway(chord.notes, highway);
     return (identified && identified.displayName) || null;
-  }
+  };
 
   // Attaches each chord inside [line.startT, line.endT) to the nearest
   // word at-or-before its time. Returns a Map of word index -> chord name.
-  function _assignChordsToLine(line, chords, templates, highway) {
+  const _assignChordsToLine = (line, chords, templates, highway) => {
     const marks = new Map();
     for (const chord of chords || []) {
       if (chord.t < line.startT || chord.t >= line.endT) continue;
@@ -378,16 +378,16 @@ if (!window[`__${PLUGIN_ID}_installed`]) {
       if (name) marks.set(idx, name);
     }
     return marks;
-  }
+  };
 
-  function _findLineIndex(lines, time) {
+  const _findLineIndex = (lines, time) => {
     for (let i = lines.length - 1; i >= 0; i--) {
       if (lines[i].startT <= time) return i;
     }
     return lines.length ? 0 : -1;
-  }
+  };
 
-  function _renderLine(container, line, marks, currentTime) {
+  const _renderLine = (container, line, marks, currentTime) => {
     container.innerHTML = "";
     line.words.forEach((word, i) => {
       const wordWrap = document.createElement("span");
@@ -404,7 +404,7 @@ if (!window[`__${PLUGIN_ID}_installed`]) {
       wordWrap.appendChild(textEl);
       container.appendChild(wordWrap);
     });
-  }
+  };
 
   const viewState = {
     active: false,
@@ -416,7 +416,7 @@ if (!window[`__${PLUGIN_ID}_installed`]) {
     lastRenderedLine: -1,
   };
 
-  function _viewLoop() {
+  const _viewLoop = () => {
     if (!viewState.active) return;
     viewState.rafId = requestAnimationFrame(_viewLoop);
 
@@ -436,9 +436,9 @@ if (!window[`__${PLUGIN_ID}_installed`]) {
     const marks = _assignChordsToLine(line, chords, templates, highway);
     _renderLine(viewState.linesEl, line, marks, time);
     viewState.lastRenderedLine = idx;
-  }
+  };
 
-  function _connectLyricsSocket(highway) {
+  const _connectLyricsSocket = (highway) => {
     const songInfo = highway.getSongInfo ? highway.getSongInfo() : null;
     if (!songInfo || !songInfo.filename || typeof WebSocket === "undefined") return;
 
@@ -460,9 +460,9 @@ if (!window[`__${PLUGIN_ID}_installed`]) {
     };
     ws.onerror = () => { /* no lyrics for this song, or a dropped connection — view just stays empty */ };
     viewState.ws = ws;
-  }
+  };
 
-  function _buildViewOverlay() {
+  const _buildViewOverlay = () => {
     const player = document.getElementById("player");
     if (!player) return;
     const wrap = document.createElement("div");
@@ -473,9 +473,9 @@ if (!window[`__${PLUGIN_ID}_installed`]) {
     player.appendChild(wrap);
     viewState.wrap = wrap;
     viewState.linesEl = linesEl;
-  }
+  };
 
-  function _startView() {
+  const _startView = () => {
     const highway = window.highway;
     if (!highway) return;
     viewState.active = true;
@@ -484,9 +484,9 @@ if (!window[`__${PLUGIN_ID}_installed`]) {
     _buildViewOverlay();
     _connectLyricsSocket(highway);
     _viewLoop();
-  }
+  };
 
-  function _stopView(btn) {
+  const _stopView = (btn) => {
     viewState.active = false;
     if (btn) btn.classList.remove("chordr-view-active");
     if (viewState.rafId) cancelAnimationFrame(viewState.rafId);
@@ -499,21 +499,21 @@ if (!window[`__${PLUGIN_ID}_installed`]) {
       viewState.wrap.remove();
       viewState.wrap = null;
     }
-  }
+  };
 
-  function _toggleView(btn) {
+  const _toggleView = (btn) => {
     if (viewState.active) {
       _stopView(btn);
     } else {
       _startView();
       if (btn) btn.classList.add("chordr-view-active");
     }
-  }
+  };
 
   // Reconnect the lyrics socket on every new song while the view is active
   // — the WS the view opened for the previous song is for the previous
   // filename/arrangement and won't emit again.
-  function _wrapPlaySongForView() {
+  const _wrapPlaySongForView = () => {
     if (window[`__${PLUGIN_ID}_viewPlaySongWrapped`]) return;
     if (typeof window.playSong !== "function") return;
     window[`__${PLUGIN_ID}_viewPlaySongWrapped`] = true;
@@ -530,9 +530,9 @@ if (!window[`__${PLUGIN_ID}_installed`]) {
       }
       return result;
     };
-  }
+  };
 
-  function _injectViewToggle() {
+  const _injectViewToggle = () => {
     const build = () => {
       const container =
         window.feedBack && window.feedBack.uiVersion === "v3" && window.feedBack.ui
@@ -551,7 +551,7 @@ if (!window[`__${PLUGIN_ID}_installed`]) {
     };
 
     if (!build()) window.addEventListener("feedBack:ui:ready", build, { once: true });
-  }
+  };
 
   if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
     _injectViewToggle();
