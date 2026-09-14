@@ -609,6 +609,18 @@ if (!window[`__${PLUGIN_ID}_installed`]) {
     pitchFromBase,
     noteName,
     CHORD_QUALITIES,
+    // Not part of the public API (see README) — exposed only so
+    // tests/chord_lyrics_view.test.js can drive the chord/lyrics view's
+    // internals directly instead of standing up a full DOM + WebSocket +
+    // requestAnimationFrame environment.
+    _internal: {
+      assignChordsToLine: _assignChordsToLine,
+      renderLine: _renderLine,
+      updateSungState: _updateSungState,
+      clearLine: _clearLine,
+      viewLoop: _viewLoop,
+      viewState,
+    },
   };
   }
 })();

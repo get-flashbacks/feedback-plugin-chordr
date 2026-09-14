@@ -72,6 +72,7 @@ the same parsing.
 node tests/chord_analysis.test.js
 node tests/generate_chord_templates.test.js
 node tests/build_lyric_lines.test.js
+node tests/chord_lyrics_view.test.js
 ```
 
 ## License
