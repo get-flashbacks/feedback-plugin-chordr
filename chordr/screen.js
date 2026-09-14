@@ -382,15 +382,26 @@ if (!window[`__${PLUGIN_ID}_installed`]) {
     return marks;
   };
 
+  // Only the line whose [startT, endT) window contains `time` — not "the
+  // last line that's started", which would keep showing a line after its
+  // own endT (inconsistent with chords, which already respect endT via
+  // _assignChordsToLine) and would show line 0 before playback ever
+  // reaches it.
   const _findLineIndex = (lines, time) => {
     for (let i = lines.length - 1; i >= 0; i--) {
-      if (lines.at(i).startT <= time) return i;
+      const line = lines.at(i);
+      if (line.startT <= time && time < line.endT) return i;
     }
-    return lines.length ? 0 : -1;
+    return -1;
   };
 
-  const _renderLine = (container, line, marks, currentTime) => {
+  // Builds the line's DOM once and caches each word's text element + onset
+  // time on `state.renderedWords`, so per-frame work (_updateSungState)
+  // never has to touch the DOM tree itself, only toggle a class.
+  const _renderLine = (state, line, marks) => {
+    const container = state.linesEl;
     container.innerHTML = "";
+    const renderedWords = [];
     line.words.forEach((word, i) => {
       const wordWrap = document.createElement("span");
       wordWrap.className = "chordr-word";
@@ -401,11 +412,30 @@ if (!window[`__${PLUGIN_ID}_installed`]) {
         wordWrap.appendChild(chordEl);
       }
       const textEl = document.createElement("span");
-      textEl.className = "chordr-lyric-text" + (currentTime >= word.t ? " chordr-word-sung" : "");
+      textEl.className = "chordr-lyric-text";
       textEl.textContent = word.text + " ";
       wordWrap.appendChild(textEl);
       container.appendChild(wordWrap);
+      renderedWords.push({ el: textEl, t: word.t, sung: false });
     });
+    state.renderedWords = renderedWords;
+  };
+
+  const _clearLine = (state) => {
+    if (state.linesEl) state.linesEl.innerHTML = "";
+    state.renderedWords = [];
+  };
+
+  // Per-frame cost: a classList toggle per word, only on an actual sung/
+  // not-sung transition — no DOM (re)construction.
+  const _updateSungState = (state, time) => {
+    for (const word of state.renderedWords) {
+      const shouldBeSung = time >= word.t;
+      if (shouldBeSung !== word.sung) {
+        word.sung = shouldBeSung;
+        word.el.classList.toggle("chordr-word-sung", shouldBeSung);
+      }
+    }
   };
 
   const viewState = {
@@ -416,6 +446,7 @@ if (!window[`__${PLUGIN_ID}_installed`]) {
     ws: null,
     lyricLines: [],
     lastRenderedLine: -1,
+    renderedWords: [],
   };
 
   const _viewLoop = () => {
@@ -427,17 +458,23 @@ if (!window[`__${PLUGIN_ID}_installed`]) {
 
     const time = highway.getTime();
     const idx = _findLineIndex(viewState.lyricLines, time);
-    if (idx < 0) return;
 
-    const line = viewState.lyricLines.at(idx);
-    const chords = highway.getChords ? highway.getChords() : [];
-    const templates = highway.getChordTemplates ? highway.getChordTemplates() : null;
+    // Chord identification + DOM (re)construction only happen when the
+    // line actually changes, not on every one of ~60 frames/sec.
+    if (idx !== viewState.lastRenderedLine) {
+      viewState.lastRenderedLine = idx;
+      if (idx < 0) {
+        _clearLine(viewState);
+      } else {
+        const line = viewState.lyricLines.at(idx);
+        const chords = highway.getChords ? highway.getChords() : [];
+        const templates = highway.getChordTemplates ? highway.getChordTemplates() : null;
+        const marks = _assignChordsToLine(line, chords, templates, highway);
+        _renderLine(viewState, line, marks);
+      }
+    }
 
-    // Re-render on every frame (not just line changes) so the "sung" word
-    // highlight tracks currentTime within the line.
-    const marks = _assignChordsToLine(line, chords, templates, highway);
-    _renderLine(viewState.linesEl, line, marks, time);
-    viewState.lastRenderedLine = idx;
+    if (idx >= 0) _updateSungState(viewState, time);
   };
 
   const _connectLyricsSocket = (highway) => {
@@ -483,6 +520,7 @@ if (!window[`__${PLUGIN_ID}_installed`]) {
     viewState.active = true;
     viewState.lyricLines = [];
     viewState.lastRenderedLine = -1;
+    viewState.renderedWords = [];
     _buildViewOverlay();
     _connectLyricsSocket(highway);
     _viewLoop();
@@ -566,6 +604,7 @@ if (!window[`__${PLUGIN_ID}_installed`]) {
     identifyFromHighway,
     generateChordTemplates,
     buildLyricLines,
+    findLineIndex: _findLineIndex,
     baseOpenStringMidis,
     pitchFromBase,
     noteName,

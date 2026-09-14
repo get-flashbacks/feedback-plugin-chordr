@@ -73,3 +73,43 @@ test('buildLyricLines skips malformed entries without a string "w"', () => {
     assert.equal(lines.length, 1);
     assert.deepEqual(lines[0].words.map((w) => w.text), ['ok']);
 });
+
+// Coverage for the chord/lyrics view's line lookup (window.chordr.findLineIndex),
+// fixing two real bugs a review caught: showing line 0 before playback ever
+// reaches it, and a line staying displayed past its own endT.
+test('findLineIndex returns -1 before the first line has started', () => {
+    const chordr = freshPlugin();
+    const lines = [{ startT: 5, endT: 8 }, { startT: 8, endT: 12 }];
+
+    assert.equal(chordr.findLineIndex(lines, 0), -1);
+    assert.equal(chordr.findLineIndex(lines, 4.9), -1);
+});
+
+test('findLineIndex returns the line whose [startT, endT) window contains time', () => {
+    const chordr = freshPlugin();
+    const lines = [{ startT: 5, endT: 8 }, { startT: 8, endT: 12 }];
+
+    assert.equal(chordr.findLineIndex(lines, 5), 0);
+    assert.equal(chordr.findLineIndex(lines, 7.9), 0);
+    assert.equal(chordr.findLineIndex(lines, 8), 1);
+    assert.equal(chordr.findLineIndex(lines, 11.9), 1);
+});
+
+test('findLineIndex returns -1 during a gap between two lines, not the previous line', () => {
+    const chordr = freshPlugin();
+    const lines = [{ startT: 0, endT: 3 }, { startT: 5, endT: 8 }];
+
+    assert.equal(chordr.findLineIndex(lines, 4), -1);
+});
+
+test('findLineIndex treats an open-ended (Infinity) endT as covering everything after startT', () => {
+    const chordr = freshPlugin();
+    const lines = [{ startT: 0, endT: 3 }, { startT: 5, endT: Infinity }];
+
+    assert.equal(chordr.findLineIndex(lines, 1000), 1);
+});
+
+test('findLineIndex returns -1 for an empty lines array', () => {
+    const chordr = freshPlugin();
+    assert.equal(chordr.findLineIndex([], 5), -1);
+});
