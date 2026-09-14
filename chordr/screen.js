@@ -340,7 +340,7 @@ if (!window[`__${PLUGIN_ID}_installed`]) {
 
       if (!current) current = { words: [], startT: entry.t };
       if (joinsPrev && current.words.length) {
-        current.words[current.words.length - 1].text += word;
+        current.words.at(-1).text += word;
       } else {
         current.words.push({ text: word, t: entry.t });
       }
@@ -371,9 +371,11 @@ if (!window[`__${PLUGIN_ID}_installed`]) {
       if (chord.t < line.startT || chord.t >= line.endT) continue;
       let idx = 0;
       for (let i = 0; i < line.words.length; i++) {
-        if (line.words[i].t <= chord.t) idx = i;
+        if (line.words.at(i).t <= chord.t) idx = i;
       }
-      const template = templates ? templates[chord.id] : null;
+      const chordId = Number(chord.id);
+      const template =
+        templates && Number.isInteger(chordId) && chordId >= 0 ? templates.at(chordId) : null;
       const name = _chordDisplayName(chord, template, highway);
       if (name) marks.set(idx, name);
     }
@@ -382,7 +384,7 @@ if (!window[`__${PLUGIN_ID}_installed`]) {
 
   const _findLineIndex = (lines, time) => {
     for (let i = lines.length - 1; i >= 0; i--) {
-      if (lines[i].startT <= time) return i;
+      if (lines.at(i).startT <= time) return i;
     }
     return lines.length ? 0 : -1;
   };
@@ -427,7 +429,7 @@ if (!window[`__${PLUGIN_ID}_installed`]) {
     const idx = _findLineIndex(viewState.lyricLines, time);
     if (idx < 0) return;
 
-    const line = viewState.lyricLines[idx];
+    const line = viewState.lyricLines.at(idx);
     const chords = highway.getChords ? highway.getChords() : [];
     const templates = highway.getChordTemplates ? highway.getChordTemplates() : null;
 
