@@ -351,7 +351,7 @@ if (!window[`__${PLUGIN_ID}_installed`]) {
       }
     }
     if (current && current.words.length) {
-      current.endT = current.words[current.words.length - 1].t + 1e9; // open-ended: no trailing "+" ever closed it
+      current.endT = Infinity; // open-ended: no trailing "+" ever closed it
       lines.push(current);
     }
     return lines;
