@@ -77,17 +77,18 @@ test('buildLyricLines skips malformed entries without a string "w"', () => {
 // Coverage for the chord/lyrics view's line lookup (window.chordr.findLineIndex),
 // fixing two real bugs a review caught: showing line 0 before playback ever
 // reaches it, and a line staying displayed past its own endT.
+const TWO_LINES = [{ startT: 5, endT: 8 }, { startT: 8, endT: 12 }];
+
 test('findLineIndex returns -1 before the first line has started', () => {
     const chordr = freshPlugin();
-    const lines = [{ startT: 5, endT: 8 }, { startT: 8, endT: 12 }];
 
-    assert.equal(chordr.findLineIndex(lines, 0), -1);
-    assert.equal(chordr.findLineIndex(lines, 4.9), -1);
+    assert.equal(chordr.findLineIndex(TWO_LINES, 0), -1);
+    assert.equal(chordr.findLineIndex(TWO_LINES, 4.9), -1);
 });
 
 test('findLineIndex returns the line whose [startT, endT) window contains time', () => {
     const chordr = freshPlugin();
-    const lines = [{ startT: 5, endT: 8 }, { startT: 8, endT: 12 }];
+    const lines = TWO_LINES;
 
     assert.equal(chordr.findLineIndex(lines, 5), 0);
     assert.equal(chordr.findLineIndex(lines, 7.9), 0);

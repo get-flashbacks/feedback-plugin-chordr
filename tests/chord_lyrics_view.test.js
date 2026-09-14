@@ -56,7 +56,11 @@ class FakeWebSocket {
 FakeWebSocket.instances = [];
 
 function freshPlugin(windowExtras) {
-  global.document = { createElement: (tag) => new FakeElement(tag) };
+  const player = new FakeElement('div');
+  global.document = {
+    createElement: (tag) => new FakeElement(tag),
+    getElementById: (id) => (id === 'player' ? player : null),
+  };
   global.location = { protocol: 'https:', host: 'example.test' };
   global.requestAnimationFrame = () => 1;
   global.cancelAnimationFrame = () => {};
@@ -67,6 +71,30 @@ function freshPlugin(windowExtras) {
   delete require.cache[require.resolve('../chordr/screen.js')];
   require('../chordr/screen.js');
   return global.window.chordr;
+}
+
+// Shared setup for tests that drive _viewLoop/_startView directly: a
+// highway stub and a primed viewState, so each test only states what it
+// overrides instead of repeating the same object literals.
+function mockHighway(overrides) {
+  return Object.assign(
+    { getTime: () => 0, getChords: () => [], getChordTemplates: () => [] },
+    overrides
+  );
+}
+
+function initViewState(viewState, overrides) {
+  Object.assign(
+    viewState,
+    {
+      active: true,
+      linesEl: new FakeElement('div'),
+      lyricLines: [],
+      lastRenderedLine: -1,
+      renderedWords: [],
+    },
+    overrides
+  );
 }
 
 // ── _assignChordsToLine ─────────────────────────────────────────────
@@ -100,6 +128,20 @@ test('assignChordsToLine ignores chords outside the line\'s [startT, endT) windo
   const marks = chordr._internal.assignChordsToLine(line, chords, [], null);
 
   assert.equal(marks.size, 0);
+});
+
+test('assignChordsToLine concatenates multiple chords landing on the same word instead of overwriting', () => {
+  const chordr = freshPlugin();
+  const line = { startT: 0, endT: 10, words: [{ text: 'strum', t: 0 }] };
+  const chords = [
+    { t: 0, id: 0, notes: [] },
+    { t: 0.5, id: 1, notes: [] }, // still nearest to the same (only) word
+  ];
+  const templates = [{ name: 'C' }, { name: 'G' }];
+
+  const marks = chordr._internal.assignChordsToLine(line, chords, templates, null);
+
+  assert.equal(marks.get(0), 'C G');
 });
 
 test('assignChordsToLine falls back to null (no mark) when the chord has no name and can\'t be identified', () => {
@@ -185,17 +227,8 @@ test('viewLoop builds the line only on a line-index change, not on every call', 
   const chordr = freshPlugin();
   const { viewState } = chordr._internal;
 
-  viewState.active = true;
-  viewState.linesEl = new FakeElement('div');
-  viewState.lyricLines = [{ startT: 0, endT: 10, words: [{ text: 'hi', t: 0 }] }];
-  viewState.lastRenderedLine = -1;
-  viewState.renderedWords = [];
-
-  global.window.highway = {
-    getTime: () => 1,
-    getChords: () => [],
-    getChordTemplates: () => [],
-  };
+  initViewState(viewState, { lyricLines: [{ startT: 0, endT: 10, words: [{ text: 'hi', t: 0 }] }] });
+  global.window.highway = mockHighway({ getTime: () => 1 });
 
   chordr._internal.viewLoop();
   assert.equal(viewState.lastRenderedLine, 0);
@@ -213,16 +246,9 @@ test('viewLoop clears the overlay when playback moves outside every line', () =>
   const chordr = freshPlugin();
   const { viewState } = chordr._internal;
 
-  viewState.active = true;
-  viewState.linesEl = new FakeElement('div');
-  viewState.lyricLines = [{ startT: 5, endT: 8, words: [{ text: 'hi', t: 5 }] }];
-  viewState.renderedWords = [];
-
-  global.window.highway = {
-    getTime: () => 5, // inside the line first, to actually render something to clear
-    getChords: () => [],
-    getChordTemplates: () => [],
-  };
+  initViewState(viewState, { lyricLines: [{ startT: 5, endT: 8, words: [{ text: 'hi', t: 5 }] }] });
+  // Start inside the line, to actually render something to clear.
+  global.window.highway = mockHighway({ getTime: () => 5 });
 
   chordr._internal.viewLoop();
   assert.equal(viewState.lastRenderedLine, 0);
@@ -235,6 +261,41 @@ test('viewLoop clears the overlay when playback moves outside every line', () =>
   assert.equal(viewState.lastRenderedLine, -1);
   assert.equal(viewState.linesEl.children.length, 0);
   assert.deepEqual(viewState.renderedWords, []);
+});
+
+// ── _startView ───────────────────────────────────────────────────────
+
+test('startView returns false and does nothing when there is no highway yet', () => {
+  const chordr = freshPlugin();
+  global.window.highway = undefined;
+
+  const started = chordr._internal.startView();
+
+  assert.equal(started, false);
+  assert.equal(chordr._internal.viewState.active, false);
+});
+
+test('startView returns false and is a no-op when the view is already active', () => {
+  const chordr = freshPlugin();
+  global.window.highway = mockHighway();
+  const { viewState } = chordr._internal;
+  initViewState(viewState); // already active
+  const existingWrap = viewState.wrap;
+
+  const started = chordr._internal.startView();
+
+  assert.equal(started, false);
+  assert.equal(viewState.wrap, existingWrap, 'must not build a second overlay / second rAF loop');
+});
+
+test('startView returns true and activates the view when a highway is present', () => {
+  const chordr = freshPlugin();
+  global.window.highway = mockHighway();
+
+  const started = chordr._internal.startView();
+
+  assert.equal(started, true);
+  assert.equal(chordr._internal.viewState.active, true);
 });
 
 // ── playSong wrapper (chordr#3's reconnect-on-song-change) ──────────

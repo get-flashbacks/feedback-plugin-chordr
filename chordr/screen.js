@@ -377,7 +377,13 @@ if (!window[`__${PLUGIN_ID}_installed`]) {
       const template =
         templates && Number.isInteger(chordId) && chordId >= 0 ? templates.at(chordId) : null;
       const name = _chordDisplayName(chord, template, highway);
-      if (name) marks.set(idx, name);
+      if (name) {
+        // A word can span more than one chord change (rare, but real —
+        // dense strumming patterns); concatenate rather than let the
+        // later chord silently overwrite the earlier one.
+        const existing = marks.get(idx);
+        marks.set(idx, existing ? `${existing} ${name}` : name);
+      }
     }
     return marks;
   };
@@ -524,9 +530,13 @@ if (!window[`__${PLUGIN_ID}_installed`]) {
     viewState.linesEl = linesEl;
   };
 
+  // Returns whether the view actually started, so callers (the toggle
+  // button) don't show "active" styling for a start that silently
+  // no-op'd (no highway yet) or was ignored (already running).
   const _startView = () => {
+    if (viewState.active) return false;
     const highway = window.highway;
-    if (!highway) return;
+    if (!highway) return false;
     viewState.active = true;
     viewState.lyricLines = [];
     viewState.lastRenderedLine = -1;
@@ -534,6 +544,7 @@ if (!window[`__${PLUGIN_ID}_installed`]) {
     _buildViewOverlay();
     _connectLyricsSocket(highway);
     _viewLoop();
+    return true;
   };
 
   const _stopView = (btn) => {
@@ -554,9 +565,8 @@ if (!window[`__${PLUGIN_ID}_installed`]) {
   const _toggleView = (btn) => {
     if (viewState.active) {
       _stopView(btn);
-    } else {
-      _startView();
-      if (btn) btn.classList.add("chordr-view-active");
+    } else if (_startView() && btn) {
+      btn.classList.add("chordr-view-active");
     }
   };
 
@@ -629,6 +639,9 @@ if (!window[`__${PLUGIN_ID}_installed`]) {
       updateSungState: _updateSungState,
       clearLine: _clearLine,
       viewLoop: _viewLoop,
+      startView: _startView,
+      stopView: _stopView,
+      toggleView: _toggleView,
       viewState,
     },
   };
