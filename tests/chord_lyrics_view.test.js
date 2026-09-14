@@ -136,6 +136,17 @@ test('renderLine builds one word element per word, with a chord label only on ma
   );
 });
 
+test('renderLine does not add a trailing space to word text (spacing is CSS margin only)', () => {
+  const chordr = freshPlugin();
+  const state = { linesEl: new FakeElement('div') };
+  const line = { words: [{ text: 'hey', t: 0 }] };
+
+  chordr._internal.renderLine(state, line, new Map());
+
+  const textEl = state.linesEl.children[0].children[0];
+  assert.equal(textEl.textContent, 'hey');
+});
+
 test('updateSungState flips the class only on an actual sung/not-sung transition', () => {
   const chordr = freshPlugin();
   const el = new FakeElement('span');

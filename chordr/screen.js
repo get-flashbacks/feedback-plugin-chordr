@@ -413,7 +413,7 @@ if (!window[`__${PLUGIN_ID}_installed`]) {
       }
       const textEl = document.createElement("span");
       textEl.className = "chordr-lyric-text";
-      textEl.textContent = word.text + " ";
+      textEl.textContent = word.text;
       wordWrap.appendChild(textEl);
       container.appendChild(wordWrap);
       renderedWords.push({ el: textEl, t: word.t, sung: false });
@@ -449,6 +449,8 @@ if (!window[`__${PLUGIN_ID}_installed`]) {
     renderedWords: [],
   };
 
+  const _lineCoversTime = (line, time) => !!line && line.startT <= time && time < line.endT;
+
   const _viewLoop = () => {
     if (!viewState.active) return;
     viewState.rafId = requestAnimationFrame(_viewLoop);
@@ -457,7 +459,15 @@ if (!window[`__${PLUGIN_ID}_installed`]) {
     if (!highway || !highway.getTime || !viewState.lyricLines.length) return;
 
     const time = highway.getTime();
-    const idx = _findLineIndex(viewState.lyricLines, time);
+
+    // Common case: still inside the same line as last frame — skip the
+    // full backward scan _findLineIndex does and just recheck this one
+    // line's bounds.
+    const currentLine =
+      viewState.lastRenderedLine >= 0 ? viewState.lyricLines.at(viewState.lastRenderedLine) : null;
+    const idx = _lineCoversTime(currentLine, time)
+      ? viewState.lastRenderedLine
+      : _findLineIndex(viewState.lyricLines, time);
 
     // Chord identification + DOM (re)construction only happen when the
     // line actually changes, not on every one of ~60 frames/sec.
