@@ -2,13 +2,11 @@
 // Coverage for chordr#3's lyrics-view line builder (window.chordr.buildLyricLines).
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const path = require('node:path');
 
 function freshPlugin(windowExtras) {
     global.window = Object.assign({}, windowExtras);
-    const file = path.join(__dirname, '..', 'chordr', 'screen.js');
-    delete require.cache[require.resolve(file)];
-    require(file);
+    delete require.cache[require.resolve('../chordr/screen.js')];
+    require('../chordr/screen.js');
     return global.window.chordr;
 }
 
