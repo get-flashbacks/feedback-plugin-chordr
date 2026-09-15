@@ -314,15 +314,350 @@ if (!window[`__${PLUGIN_ID}_installed`]) {
     else window.addEventListener("feedBack:capabilities:ready", _registerChartTransform, { once: true });
   }
 
+  // ── Chord/lyrics view (chordr#3) ─────────────────────────────────────
+  // Ultimate-Guitar-style overlay: shows the current line of lyrics with
+  // chord names positioned above the word nearest each chord's time.
+  // `highway.getChords()`/`getChordTemplates()` already cover chords;
+  // lyrics have no highway getter (see core CLAUDE.md's WS protocol
+  // reference), so this opens its own short-lived WebSocket just for the
+  // `lyrics` message, the same pattern splitscreen's lyrics pane uses.
+
+  // Turns the raw lyrics wire array ([{w,t,d}, ...]) into lines of words,
+  // per the WS protocol: a leading `-` on `w` joins to the previous word
+  // (no space), a trailing `+` ends the current line. Exposed on
+  // `window.chordr` since it's pure and reusable by other lyrics-consuming
+  // plugins, not just this view.
+  const buildLyricLines = (lyricsData) => {
+    const lines = [];
+    let current = null;
+    for (const entry of lyricsData || []) {
+      if (!entry || typeof entry.w !== "string") continue;
+      let word = entry.w;
+      const joinsPrev = word.startsWith("-");
+      const breaksAfter = word.endsWith("+");
+      if (joinsPrev) word = word.slice(1);
+      if (breaksAfter) word = word.slice(0, -1);
+
+      if (!current) current = { words: [], startT: entry.t };
+      if (joinsPrev && current.words.length) {
+        current.words.at(-1).text += word;
+      } else {
+        current.words.push({ text: word, t: entry.t });
+      }
+      if (breaksAfter) {
+        current.endT = entry.t + (entry.d || 0);
+        lines.push(current);
+        current = null;
+      }
+    }
+    if (current && current.words.length) {
+      current.endT = Infinity; // open-ended: no trailing "+" ever closed it
+      lines.push(current);
+    }
+    return lines;
+  };
+
+  const _chordDisplayName = (chord, template, highway) => {
+    if (template && template.name) return template.name;
+    const identified = identifyFromHighway(chord.notes, highway);
+    return (identified && identified.displayName) || null;
+  };
+
+  // Attaches each chord inside [line.startT, line.endT) to the nearest
+  // word at-or-before its time. Returns a Map of word index -> chord name.
+  const _assignChordsToLine = (line, chords, templates, highway) => {
+    const marks = new Map();
+    for (const chord of chords || []) {
+      if (chord.t < line.startT || chord.t >= line.endT) continue;
+      let idx = 0;
+      for (let i = 0; i < line.words.length; i++) {
+        if (line.words.at(i).t <= chord.t) idx = i;
+      }
+      const chordId = Number(chord.id);
+      const template =
+        templates && Number.isInteger(chordId) && chordId >= 0 ? templates.at(chordId) : null;
+      const name = _chordDisplayName(chord, template, highway);
+      if (name) {
+        // A word can span more than one chord change (rare, but real —
+        // dense strumming patterns); concatenate rather than let the
+        // later chord silently overwrite the earlier one.
+        const existing = marks.get(idx);
+        marks.set(idx, existing ? `${existing} ${name}` : name);
+      }
+    }
+    return marks;
+  };
+
+  // Only the line whose [startT, endT) window contains `time` — not "the
+  // last line that's started", which would keep showing a line after its
+  // own endT (inconsistent with chords, which already respect endT via
+  // _assignChordsToLine) and would show line 0 before playback ever
+  // reaches it.
+  const _findLineIndex = (lines, time) => {
+    for (let i = lines.length - 1; i >= 0; i--) {
+      const line = lines.at(i);
+      if (line.startT <= time && time < line.endT) return i;
+    }
+    return -1;
+  };
+
+  // Builds the line's DOM once and caches each word's text element + onset
+  // time on `state.renderedWords`, so per-frame work (_updateSungState)
+  // never has to touch the DOM tree itself, only toggle a class.
+  const _renderLine = (state, line, marks) => {
+    const container = state.linesEl;
+    container.innerHTML = "";
+    const renderedWords = [];
+    line.words.forEach((word, i) => {
+      const wordWrap = document.createElement("span");
+      wordWrap.className = "chordr-word";
+      if (marks.has(i)) {
+        const chordEl = document.createElement("span");
+        chordEl.className = "chordr-chord-label";
+        chordEl.textContent = marks.get(i);
+        wordWrap.appendChild(chordEl);
+      }
+      const textEl = document.createElement("span");
+      textEl.className = "chordr-lyric-text";
+      textEl.textContent = word.text;
+      wordWrap.appendChild(textEl);
+      container.appendChild(wordWrap);
+      renderedWords.push({ el: textEl, t: word.t, sung: false });
+    });
+    state.renderedWords = renderedWords;
+  };
+
+  const _clearLine = (state) => {
+    if (state.linesEl) state.linesEl.innerHTML = "";
+    state.renderedWords = [];
+  };
+
+  // Per-frame cost: a classList toggle per word, only on an actual sung/
+  // not-sung transition — no DOM (re)construction.
+  const _updateSungState = (state, time) => {
+    for (const word of state.renderedWords) {
+      const shouldBeSung = time >= word.t;
+      if (shouldBeSung !== word.sung) {
+        word.sung = shouldBeSung;
+        word.el.classList.toggle("chordr-word-sung", shouldBeSung);
+      }
+    }
+  };
+
+  const viewState = {
+    active: false,
+    rafId: null,
+    wrap: null,
+    linesEl: null,
+    ws: null,
+    lyricLines: [],
+    lastRenderedLine: -1,
+    renderedWords: [],
+  };
+
+  const _lineCoversTime = (line, time) => !!line && line.startT <= time && time < line.endT;
+
+  const _viewLoop = () => {
+    if (!viewState.active) return;
+    viewState.rafId = requestAnimationFrame(_viewLoop);
+
+    const highway = window.highway;
+    if (!highway || !highway.getTime || !viewState.lyricLines.length) return;
+
+    const time = highway.getTime();
+
+    // Common case: still inside the same line as last frame — skip the
+    // full backward scan _findLineIndex does and just recheck this one
+    // line's bounds.
+    const currentLine =
+      viewState.lastRenderedLine >= 0 ? viewState.lyricLines.at(viewState.lastRenderedLine) : null;
+    const idx = _lineCoversTime(currentLine, time)
+      ? viewState.lastRenderedLine
+      : _findLineIndex(viewState.lyricLines, time);
+
+    // Chord identification + DOM (re)construction only happen when the
+    // line actually changes, not on every one of ~60 frames/sec.
+    if (idx !== viewState.lastRenderedLine) {
+      viewState.lastRenderedLine = idx;
+      if (idx < 0) {
+        _clearLine(viewState);
+      } else {
+        const line = viewState.lyricLines.at(idx);
+        const chords = highway.getChords ? highway.getChords() : [];
+        const templates = highway.getChordTemplates ? highway.getChordTemplates() : null;
+        const marks = _assignChordsToLine(line, chords, templates, highway);
+        _renderLine(viewState, line, marks);
+      }
+    }
+
+    if (idx >= 0) _updateSungState(viewState, time);
+  };
+
+  const _connectLyricsSocket = (highway) => {
+    const songInfo = highway.getSongInfo ? highway.getSongInfo() : null;
+    if (!songInfo || !songInfo.filename || typeof WebSocket === "undefined") return;
+
+    let name = songInfo.filename;
+    try { name = decodeURIComponent(name); } catch (_) { /* already decoded */ }
+    const arrIndex = songInfo.arrangement_index || 0;
+    const scheme = location.protocol === "https:" ? "wss" : "ws";
+    const url = `${scheme}://${location.host}/ws/highway/${encodeURIComponent(name)}?arrangement=${arrIndex}`;
+
+    const ws = new WebSocket(url);
+    ws.onmessage = (event) => {
+      let msg;
+      try { msg = JSON.parse(event.data); } catch (_) { return; }
+      if (msg.type === "lyrics") {
+        viewState.lyricLines = buildLyricLines(msg.data);
+      } else if (msg.type === "ready") {
+        ws.close(); // only needed the lyrics message off this connection
+      }
+    };
+    ws.onerror = () => { /* no lyrics for this song, or a dropped connection — view just stays empty */ };
+    viewState.ws = ws;
+  };
+
+  const _buildViewOverlay = () => {
+    const player = document.getElementById("player");
+    if (!player) return;
+    const wrap = document.createElement("div");
+    wrap.className = "chordr-view-overlay";
+    const linesEl = document.createElement("div");
+    linesEl.className = "chordr-view-lines";
+    wrap.appendChild(linesEl);
+    player.appendChild(wrap);
+    viewState.wrap = wrap;
+    viewState.linesEl = linesEl;
+  };
+
+  // Returns whether the view actually started, so callers (the toggle
+  // button) don't show "active" styling for a start that silently
+  // no-op'd (no highway yet) or was ignored (already running).
+  const _startView = () => {
+    if (viewState.active) return false;
+    const highway = window.highway;
+    if (!highway) return false;
+    viewState.active = true;
+    viewState.lyricLines = [];
+    viewState.lastRenderedLine = -1;
+    viewState.renderedWords = [];
+    _buildViewOverlay();
+    _connectLyricsSocket(highway);
+    _viewLoop();
+    // _wrapPlaySongForView() already ran once at plugin load, but plugins
+    // load asynchronously relative to when core binds window.playSong —
+    // if this screen's script ran first, that install permanently no-op'd
+    // (it bails if window.playSong isn't a function yet). By the time a
+    // user can toggle the view at all, window.highway exists, so the app
+    // is fully up and window.playSong is guaranteed to be bound — retry
+    // the wrap here (it's idempotent via __chordr_viewPlaySongWrapped).
+    _wrapPlaySongForView();
+    return true;
+  };
+
+  const _stopView = (btn) => {
+    viewState.active = false;
+    if (btn) btn.classList.remove("chordr-view-active");
+    if (viewState.rafId) cancelAnimationFrame(viewState.rafId);
+    viewState.rafId = null;
+    if (viewState.ws) {
+      viewState.ws.close();
+      viewState.ws = null;
+    }
+    if (viewState.wrap) {
+      viewState.wrap.remove();
+      viewState.wrap = null;
+    }
+  };
+
+  const _toggleView = (btn) => {
+    if (viewState.active) {
+      _stopView(btn);
+    } else if (_startView() && btn) {
+      btn.classList.add("chordr-view-active");
+    }
+  };
+
+  // Reconnect the lyrics socket on every new song while the view is active
+  // — the WS the view opened for the previous song is for the previous
+  // filename/arrangement and won't emit again.
+  const _wrapPlaySongForView = () => {
+    if (window[`__${PLUGIN_ID}_viewPlaySongWrapped`]) return;
+    if (typeof window.playSong !== "function") return;
+    window[`__${PLUGIN_ID}_viewPlaySongWrapped`] = true;
+    const original = window.playSong;
+    window.playSong = async function (...args) {
+      // Clear stale lyrics BEFORE awaiting the new song's load (which can
+      // take seconds) — otherwise window.highway can already reflect the
+      // new song's chords/time while viewState.lyricLines still holds the
+      // previous song's lines, showing old lyrics against new playback.
+      if (viewState.active) {
+        if (viewState.ws) {
+          viewState.ws.close();
+          viewState.ws = null;
+        }
+        viewState.lyricLines = [];
+      }
+      const result = await original.apply(this, args);
+      // Reconnect only after the new song has loaded, so
+      // getSongInfo()/getChords() reflect it, not the previous song.
+      if (viewState.active && window.highway) _connectLyricsSocket(window.highway);
+      return result;
+    };
+  };
+
+  const _injectViewToggle = () => {
+    const build = () => {
+      const container =
+        window.feedBack && window.feedBack.uiVersion === "v3" && window.feedBack.ui
+          ? window.feedBack.ui.playerControlSlot()
+          : null;
+      if (!container) return false;
+      if (container.querySelector("[data-chordr-view-toggle]")) return true;
+
+      const btn = document.createElement("button");
+      btn.setAttribute("data-chordr-view-toggle", "");
+      btn.textContent = "🎤 Chords+Lyrics";
+      btn.className = "fb-text";
+      btn.addEventListener("click", () => _toggleView(btn));
+      container.appendChild(btn);
+      return true;
+    };
+
+    if (!build()) window.addEventListener("feedBack:ui:ready", build, { once: true });
+  };
+
+  if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
+    _injectViewToggle();
+    _wrapPlaySongForView();
+  }
+
   window.chordr = {
     identifyChord,
     identifyPianoChord,
     identifyFromHighway,
     generateChordTemplates,
+    buildLyricLines,
+    findLineIndex: _findLineIndex,
     baseOpenStringMidis,
     pitchFromBase,
     noteName,
     CHORD_QUALITIES,
+    // Not part of the public API (see README) — exposed only so
+    // tests/chord_lyrics_view.test.js can drive the chord/lyrics view's
+    // internals directly instead of standing up a full DOM + WebSocket +
+    // requestAnimationFrame environment.
+    _internal: {
+      assignChordsToLine: _assignChordsToLine,
+      renderLine: _renderLine,
+      updateSungState: _updateSungState,
+      clearLine: _clearLine,
+      viewLoop: _viewLoop,
+      startView: _startView,
+      stopView: _stopView,
+      toggleView: _toggleView,
+      viewState,
+    },
   };
   }
 })();
