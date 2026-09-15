@@ -24,8 +24,17 @@ Scope of this plugin (tracked as separate issues, roughly in dependency order):
    chart field with no highway getter); chords/templates come from
    `highway.getChords()`/`getChordTemplates()` as usual.
 4. **ChordPro export** (#4) for that chord/lyrics view.
-5. **Audio-based chord detection** (#5, backlog) as a fallback source when
-   there's no chart data to read at all.
+5. **Audio-based chord detection** (#5, implemented) — a fallback chord
+   source for songs whose chart has no note/chord data at all (a
+   loose-folder song, say). Server-side chroma-CQT + template matching
+   (`chordr/audio_chords.py`, `librosa`), the same general approach as
+   [Allensy/chord-matcher](https://github.com/Allensy/chord-matcher). The
+   chord/lyrics view triggers it automatically — in the background, only
+   when `highway.getChords()` is empty — by uploading the song's audio
+   (fetched client-side from `songInfo.audio_url`, so it works uniformly
+   across sloppak/loose-folder/archive sources without this plugin having
+   to resolve format-specific audio paths itself) to
+   `POST /api/plugins/chordr/detect_chords`.
 
 ## `window.chordr` API
 
@@ -66,6 +75,30 @@ see below.
 by the chord/lyrics view; exposed since any lyrics-consuming plugin needs
 the same parsing.
 
+`detectChordsFromAudio(audioUrl)` fetches the audio at `audioUrl` and
+POSTs it to this plugin's own `/api/plugins/chordr/detect_chords` route
+for chroma-based detection, returning `[{ t, name }, ...]` or `null` on
+any failure (network error, no audio, detection failed — the caller just
+has no chords for that song, same as a chart with none). The chord/lyrics
+view calls it automatically as a fallback; exposed for any other
+lyrics/chord-consuming plugin that wants the same source.
+
+## Server routes
+
+`POST /api/plugins/chordr/detect_chords` — body is the raw audio bytes
+(any format `librosa`/`soundfile` can decode: mp3, ogg, wav, flac).
+Returns `{"chords": [{"t": <seconds>, "name": <chord name>}, ...]}`, or
+a 4xx/5xx with `{"error": "..."}` on a bad/oversized body, missing
+`librosa`, or a decode/analysis failure. Detection
+(`chordr/audio_chords.py`): `librosa.feature.chroma_cqt` per ~0.2s
+analysis frame, each frame matched against a binary chord-quality
+template table by cosine similarity (gated by both a minimum confidence
+*and* a minimum coverage — cosine similarity alone doesn't penalize
+energy outside the matched template, so a dense/noisy frame can still
+score deceptively high against some small template), then run-length
+smoothed (a single misclassified frame gets absorbed into its
+neighbors) into chord segments.
+
 ## Tests
 
 ```bash
@@ -73,6 +106,7 @@ node tests/chord_analysis.test.js
 node tests/generate_chord_templates.test.js
 node tests/build_lyric_lines.test.js
 node tests/chord_lyrics_view.test.js
+python3 -m unittest tests/test_audio_chords.py
 ```
 
 ## License

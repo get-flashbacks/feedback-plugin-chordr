@@ -358,6 +358,9 @@ if (!window[`__${PLUGIN_ID}_installed`]) {
   };
 
   const _chordDisplayName = (chord, template, highway) => {
+    // Audio-detected chords (chordr#5's fallback source) already carry
+    // their own name and have no chart notes/template to look up.
+    if (chord.name) return chord.name;
     if (template && template.name) return template.name;
     const identified = identifyFromHighway(chord.notes, highway);
     return (identified && identified.displayName) || null;
@@ -453,6 +456,7 @@ if (!window[`__${PLUGIN_ID}_installed`]) {
     lyricLines: [],
     lastRenderedLine: -1,
     renderedWords: [],
+    audioChords: null, // chordr#5's fallback source, populated lazily by _maybeDetectChordsFromAudio
   };
 
   const _lineCoversTime = (line, time) => !!line && line.startT <= time && time < line.endT;
@@ -483,7 +487,12 @@ if (!window[`__${PLUGIN_ID}_installed`]) {
         _clearLine(viewState);
       } else {
         const line = viewState.lyricLines.at(idx);
-        const chords = highway.getChords ? highway.getChords() : [];
+        // Fall back to chordr#5's audio-detected chords only when the
+        // chart has none at all — a loose-folder song with no chord
+        // data, not merely unnamed chords (#1/#2 already cover that).
+        const chartChords = highway.getChords ? highway.getChords() : [];
+        const chords =
+          chartChords && chartChords.length ? chartChords : viewState.audioChords || [];
         const templates = highway.getChordTemplates ? highway.getChordTemplates() : null;
         const marks = _assignChordsToLine(line, chords, templates, highway);
         _renderLine(viewState, line, marks);
@@ -517,6 +526,59 @@ if (!window[`__${PLUGIN_ID}_installed`]) {
     viewState.ws = ws;
   };
 
+  // chordr#5: audio-based chord detection, a fallback source for songs
+  // whose chart carries no note/chord data to derive chords from at all
+  // (chordr#1/#2 already cover the common case: chart data present, just
+  // unnamed). Fetches the song's audio (same-origin regardless of source
+  // format — sloppak/loose-folder/archive all resolve to a playable URL
+  // via songInfo.audio_url) and uploads it to the backend's chroma-CQT +
+  // template-matching detector. Returns [{ t, name }, ...] or null on any
+  // failure — the view just has no chords for this song, same as today.
+  const detectChordsFromAudio = async (audioUrl) => {
+    if (!audioUrl || typeof fetch === "undefined") return null;
+    try {
+      const audioRes = await fetch(audioUrl);
+      if (!audioRes.ok) return null;
+      const blob = await audioRes.blob();
+
+      const res = await fetch(`/api/plugins/${PLUGIN_ID}/detect_chords`, {
+        method: "POST",
+        headers: { "Content-Type": blob.type || "application/octet-stream" },
+        body: blob,
+      });
+      if (!res.ok) return null;
+
+      const data = await res.json();
+      return Array.isArray(data.chords) ? data.chords : null;
+    } catch (_) {
+      return null; // network error, decoding failure, etc. — fail soft
+    }
+  };
+
+  // Kicks off audio-based detection in the background when (and only
+  // when) the chart has no chords to show at all. Never awaited by
+  // _startView — chroma analysis of a full song can take real time, and
+  // the view should render lyrics-only immediately rather than block on it.
+  const _maybeDetectChordsFromAudio = (highway) => {
+    const chartChords = highway.getChords ? highway.getChords() : [];
+    if (chartChords && chartChords.length) return; // chart already has chords
+    const songInfo = highway.getSongInfo ? highway.getSongInfo() : null;
+    if (!songInfo || !songInfo.audio_url) return;
+
+    const requestedFor = songInfo.filename;
+    detectChordsFromAudio(songInfo.audio_url).then((chords) => {
+      // The user may have switched songs (or the view may have stopped)
+      // while this was in flight — don't attach stale results.
+      if (!viewState.active) return;
+      const currentHighway = window.highway;
+      const currentSongInfo = currentHighway && currentHighway.getSongInfo
+        ? currentHighway.getSongInfo()
+        : null;
+      if (!currentSongInfo || currentSongInfo.filename !== requestedFor) return;
+      viewState.audioChords = chords;
+    });
+  };
+
   const _buildViewOverlay = () => {
     const player = document.getElementById("player");
     if (!player) return;
@@ -541,8 +603,10 @@ if (!window[`__${PLUGIN_ID}_installed`]) {
     viewState.lyricLines = [];
     viewState.lastRenderedLine = -1;
     viewState.renderedWords = [];
+    viewState.audioChords = null;
     _buildViewOverlay();
     _connectLyricsSocket(highway);
+    _maybeDetectChordsFromAudio(highway);
     _viewLoop();
     // _wrapPlaySongForView() already ran once at plugin load, but plugins
     // load asynchronously relative to when core binds window.playSong —
@@ -597,11 +661,15 @@ if (!window[`__${PLUGIN_ID}_installed`]) {
           viewState.ws = null;
         }
         viewState.lyricLines = [];
+        viewState.audioChords = null;
       }
       const result = await original.apply(this, args);
-      // Reconnect only after the new song has loaded, so
+      // Reconnect/re-detect only after the new song has loaded, so
       // getSongInfo()/getChords() reflect it, not the previous song.
-      if (viewState.active && window.highway) _connectLyricsSocket(window.highway);
+      if (viewState.active && window.highway) {
+        _connectLyricsSocket(window.highway);
+        _maybeDetectChordsFromAudio(window.highway);
+      }
       return result;
     };
   };
@@ -643,6 +711,7 @@ if (!window[`__${PLUGIN_ID}_installed`]) {
     pitchFromBase,
     noteName,
     CHORD_QUALITIES,
+    detectChordsFromAudio,
     // Not part of the public API (see README) — exposed only so
     // tests/chord_lyrics_view.test.js can drive the chord/lyrics view's
     // internals directly instead of standing up a full DOM + WebSocket +
@@ -656,6 +725,7 @@ if (!window[`__${PLUGIN_ID}_installed`]) {
       startView: _startView,
       stopView: _stopView,
       toggleView: _toggleView,
+      maybeDetectChordsFromAudio: _maybeDetectChordsFromAudio,
       viewState,
     },
   };
