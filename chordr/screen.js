@@ -555,18 +555,19 @@ if (!window[`__${PLUGIN_ID}_installed`]) {
     }
   };
 
-  // Kicks off audio-based detection in the background when (and only
-  // when) the chart has no chords to show at all. Never awaited by
-  // _startView — chroma analysis of a full song can take real time, and
-  // the view should render lyrics-only immediately rather than block on it.
-  const _maybeDetectChordsFromAudio = (highway) => {
-    const chartChords = highway.getChords ? highway.getChords() : [];
-    if (chartChords && chartChords.length) return; // chart already has chords
-    const songInfo = highway.getSongInfo ? highway.getSongInfo() : null;
-    if (!songInfo || !songInfo.audio_url) return;
+  // Cache keyed by song filename: a resolved chords array once detection
+  // finishes, or the in-flight Promise while it's still running. Module-
+  // level (not on viewState) so it survives the view being closed and
+  // reopened for the same song — without it, every reopen re-downloaded
+  // the audio and re-ran a tens-of-seconds CQT analysis from scratch, and
+  // closing+reopening while a detection was still running could fire a
+  // second, fully concurrent duplicate analysis for the same song.
+  const _audioChordsCache = new Map();
 
-    const requestedFor = songInfo.filename;
-    detectChordsFromAudio(songInfo.audio_url).then((chords) => {
+  const _attachAudioChordsWhenReady = (promiseOrChords, requestedFor) => {
+    const promise =
+      typeof promiseOrChords.then === "function" ? promiseOrChords : Promise.resolve(promiseOrChords);
+    promise.then((chords) => {
       // The user may have switched songs (or the view may have stopped)
       // while this was in flight — don't attach stale results.
       if (!viewState.active) return;
@@ -584,6 +585,33 @@ if (!window[`__${PLUGIN_ID}_installed`]) {
       // the newly-attached chords on the very next frame.
       viewState.lastRenderedLine = -1;
     });
+  };
+
+  // Kicks off audio-based detection in the background when (and only
+  // when) the chart has no chords to show at all. Never awaited by
+  // _startView — chroma analysis of a full song can take real time, and
+  // the view should render lyrics-only immediately rather than block on it.
+  const _maybeDetectChordsFromAudio = (highway) => {
+    const chartChords = highway.getChords ? highway.getChords() : [];
+    if (chartChords && chartChords.length) return; // chart already has chords
+    const songInfo = highway.getSongInfo ? highway.getSongInfo() : null;
+    if (!songInfo || !songInfo.audio_url) return;
+
+    const requestedFor = songInfo.filename;
+
+    if (_audioChordsCache.has(requestedFor)) {
+      // Already resolved, or still in flight, for this exact song —
+      // reuse it instead of starting a duplicate detection.
+      _attachAudioChordsWhenReady(_audioChordsCache.get(requestedFor), requestedFor);
+      return;
+    }
+
+    const promise = detectChordsFromAudio(songInfo.audio_url).then((chords) => {
+      _audioChordsCache.set(requestedFor, chords); // replace the in-flight promise with its resolved value
+      return chords;
+    });
+    _audioChordsCache.set(requestedFor, promise);
+    _attachAudioChordsWhenReady(promise, requestedFor);
   };
 
   const _buildViewOverlay = () => {

@@ -559,6 +559,70 @@ test('maybeDetectChordsFromAudio discards a stale result if the song changed whi
   assert.equal(viewState.audioChords, null, "must not attach song A's result once song B is active");
 });
 
+test('maybeDetectChordsFromAudio does not re-fetch for a song whose detection is already resolved', async () => {
+  const chordr = freshPlugin();
+  let fetchCalls = 0;
+  global.fetch = async (url) => {
+    fetchCalls++;
+    return url.startsWith('/api/plugins/')
+      ? fakeJsonResponse(true, { chords: [{ t: 1, name: 'G' }] })
+      : fakeAudioResponse();
+  };
+
+  const { viewState } = chordr._internal;
+  initViewState(viewState);
+  const highway = mockHighway({
+    getChords: () => [],
+    getSongInfo: () => ({ filename: 'a.sloppak', audio_url: '/audio/a.mp3' }),
+  });
+  global.window.highway = highway;
+
+  // First open: real detection runs (2 fetches — audio, then detect_chords).
+  chordr._internal.maybeDetectChordsFromAudio(highway);
+  await flushAsync();
+  assert.equal(fetchCalls, 2);
+  assert.deepEqual(viewState.audioChords, [{ t: 1, name: 'G' }]);
+
+  // Simulate closing and reopening the view for the same song.
+  viewState.audioChords = null;
+  chordr._internal.maybeDetectChordsFromAudio(highway);
+  await flushAsync();
+
+  assert.equal(fetchCalls, 2, 'reopening the same song must reuse the cached result, not re-fetch');
+  assert.deepEqual(viewState.audioChords, [{ t: 1, name: 'G' }]);
+});
+
+test('maybeDetectChordsFromAudio does not start a second detection while one is already in flight for the same song', async () => {
+  const chordr = freshPlugin();
+  let audioFetchCalls = 0;
+  let resolveAudioFetch;
+  global.fetch = async (url) => {
+    if (url.startsWith('/api/plugins/')) return fakeJsonResponse(true, { chords: [{ t: 1, name: 'G' }] });
+    audioFetchCalls++;
+    return new Promise((resolve) => { resolveAudioFetch = () => resolve(fakeAudioResponse()); });
+  };
+
+  const { viewState } = chordr._internal;
+  initViewState(viewState);
+  const highway = mockHighway({
+    getChords: () => [],
+    getSongInfo: () => ({ filename: 'a.sloppak', audio_url: '/audio/a.mp3' }),
+  });
+  global.window.highway = highway;
+
+  // Simulate closing and reopening the view before the first detection resolves.
+  chordr._internal.maybeDetectChordsFromAudio(highway);
+  chordr._internal.maybeDetectChordsFromAudio(highway);
+
+  assert.equal(audioFetchCalls, 1, 'a second call while detection is in flight must not start a duplicate analysis');
+
+  resolveAudioFetch();
+  await flushAsync();
+  await flushAsync();
+
+  assert.deepEqual(viewState.audioChords, [{ t: 1, name: 'G' }]);
+});
+
 // ── viewLoop falls back to audioChords ───────────────────────────────
 
 test('viewLoop falls back to audioChords when the chart has no chords', () => {

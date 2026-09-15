@@ -20,6 +20,12 @@ from fastapi.responses import JSONResponse
 
 PLUGIN_ID = "chordr"
 MAX_AUDIO_BODY_BYTES = 64 * 1024 * 1024  # 64 MB — generous for one song's audio
+# Bounds decoded PCM duration, independent of MAX_AUDIO_BODY_BYTES: a
+# low-bitrate file well under the body-size cap can still decode into
+# hours of audio, and librosa.load(duration=None) would materialize all
+# of it before CQT adds further CPU/memory pressure. 15 minutes covers
+# any real song with headroom.
+MAX_AUDIO_DURATION_SECONDS = 900.0
 
 _CONTENT_TYPE_SUFFIX = {
     "audio/mpeg": ".mp3",
@@ -51,17 +57,6 @@ def setup(app: FastAPI, context: dict) -> None:
                     {"error": "invalid or oversized request body"}, status_code=413
                 )
 
-        body = bytearray()
-        async for chunk in request.stream():
-            if len(body) + len(chunk) > MAX_AUDIO_BODY_BYTES:
-                return JSONResponse(
-                    {"error": "request body too large"}, status_code=413
-                )
-            body.extend(chunk)
-
-        if not body:
-            return JSONResponse({"error": "empty request body"}, status_code=400)
-
         try:
             import librosa  # noqa: F401
         except ImportError:
@@ -74,20 +69,39 @@ def setup(app: FastAPI, context: dict) -> None:
         suffix = _CONTENT_TYPE_SUFFIX.get(content_type, ".audio")
 
         tmp_path = None
+        total_bytes = 0
         try:
+            # Stream chunks straight to disk rather than buffering the
+            # whole body (up to MAX_AUDIO_BODY_BYTES) in memory first —
+            # matters under concurrent requests.
             with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
-                tmp.write(body)
                 tmp_path = tmp.name
+                async for chunk in request.stream():
+                    total_bytes += len(chunk)
+                    if total_bytes > MAX_AUDIO_BODY_BYTES:
+                        return JSONResponse(
+                            {"error": "request body too large"}, status_code=413
+                        )
+                    tmp.write(chunk)
+
+            if total_bytes == 0:
+                return JSONResponse({"error": "empty request body"}, status_code=400)
+
             # detect_chords (chroma-CQT over a full song) can take tens of
             # seconds — run it in FastAPI's threadpool, not inline on the
             # event loop, or it blocks every other request/WebSocket
             # (including this view's own /ws/highway/... lyrics connection)
             # for its whole duration.
-            chords = await run_in_threadpool(audio_chords.detect_chords, tmp_path)
-        except Exception as exc:
+            chords = await run_in_threadpool(
+                audio_chords.detect_chords, tmp_path, duration=MAX_AUDIO_DURATION_SECONDS
+            )
+        except Exception:
+            # Full exception detail goes to the log only — the response
+            # stays generic so it doesn't leak internal paths, library
+            # versions, or stack traces to the client.
             log.exception("%s: chord detection failed", PLUGIN_ID)
             return JSONResponse(
-                {"error": f"chord detection failed: {exc}"}, status_code=500
+                {"error": "chord detection failed"}, status_code=500
             )
         finally:
             if tmp_path:

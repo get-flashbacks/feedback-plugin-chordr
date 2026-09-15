@@ -42,27 +42,21 @@ CHORD_QUALITIES = [
 
 
 def _build_templates():
-    """Precompute a 12-bin binary template vector per (root, quality)."""
+    """Precompute a 12-bin binary template vector + its Euclidean norm per
+    (root, quality). A binary template's norm is just sqrt(popcount), no
+    need to sum-of-squares it repeatedly at match time.
+    """
     templates = []
     for root in range(12):
         for suffix, intervals in CHORD_QUALITIES:
             vec = [0.0] * 12
             for iv in intervals:
                 vec[(root + iv) % 12] = 1.0
-            templates.append((NOTE_NAMES[root] + suffix, vec))
+            templates.append((NOTE_NAMES[root] + suffix, vec, len(intervals) ** 0.5))
     return templates
 
 
 _TEMPLATES = _build_templates()
-
-
-def _cosine_sim(a, b):
-    dot = sum(x * y for x, y in zip(a, b))
-    na = sum(x * x for x in a) ** 0.5
-    nb = sum(x * x for x in b) ** 0.5
-    if na == 0 or nb == 0:
-        return 0.0
-    return dot / (na * nb)
 
 
 def classify_chroma_frame(chroma_vec, min_energy=0.05, min_confidence=0.55, min_coverage=0.6):
@@ -81,15 +75,24 @@ def classify_chroma_frame(chroma_vec, min_energy=0.05, min_confidence=0.55, min_
     total_energy = sum(chroma_vec)
     if total_energy < min_energy:
         return None, 0.0
-    best_name, best_score, best_template = None, -1.0, None
-    for name, template in _TEMPLATES:
-        score = _cosine_sim(chroma_vec, template)
+
+    query_norm = sum(x * x for x in chroma_vec) ** 0.5
+    if query_norm == 0:
+        return None, 0.0
+
+    best_name, best_score, best_dot = None, -1.0, 0.0
+    for name, template, template_norm in _TEMPLATES:
+        dot = sum(x * y for x, y in zip(chroma_vec, template))
+        score = dot / (query_norm * template_norm) if template_norm else 0.0
         if score > best_score:
-            best_name, best_score, best_template = name, score, template
+            best_name, best_score, best_dot = name, score, dot
     if best_score < min_confidence:
         return None, best_score
-    matched_energy = sum(v for v, t in zip(chroma_vec, best_template) if t)
-    if matched_energy / total_energy < min_coverage:
+
+    # For a binary {0,1} template, the dot product IS the matched energy
+    # (sum of chroma_vec's own values at the template's active bins) —
+    # no need to walk the vector a second time to recompute it.
+    if best_dot / total_energy < min_coverage:
         return None, best_score
     return best_name, best_score
 
