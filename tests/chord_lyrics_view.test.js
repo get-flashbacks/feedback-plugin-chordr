@@ -350,3 +350,54 @@ test('the wrapped playSong does not touch the lyrics socket when the view is ina
   assert.equal(viewState.ws, null);
   assert.equal(FakeWebSocket.instances.length, 0);
 });
+
+test('the wrapped playSong clears stale lyrics BEFORE awaiting the new song, not after', async () => {
+  let resolveOriginal;
+  const original = () => new Promise((resolve) => { resolveOriginal = resolve; });
+
+  const chordr = freshPlugin({
+    addEventListener: () => {},
+    playSong: original,
+    highway: { getSongInfo: () => ({ filename: 'song-2.sloppak' }) },
+  });
+
+  const { viewState } = chordr._internal;
+  const staleSocket = new FakeWebSocket('wss://example.test/stale');
+  viewState.active = true;
+  viewState.ws = staleSocket;
+  viewState.lyricLines = [{ startT: 0, endT: 1, words: [] }];
+
+  const playSongPromise = global.window.playSong();
+
+  // The new song's load hasn't resolved yet (original() is still
+  // pending) — stale state must already be cleared so the overlay
+  // doesn't keep showing the previous song's lyrics during the load.
+  assert.equal(staleSocket.closed, true, 'stale socket must close before the new song finishes loading');
+  assert.deepEqual(viewState.lyricLines, [], 'stale lyrics must clear before the new song finishes loading');
+  assert.equal(FakeWebSocket.instances.length, 1, 'must not reconnect until the new song has actually loaded');
+
+  resolveOriginal('done');
+  await playSongPromise;
+
+  assert.equal(FakeWebSocket.instances.length, 2, 'reconnects once the new song has loaded');
+});
+
+// ── _startView retries the playSong wrap (install-order race) ───────
+
+test('startView retries wrapping playSong if it wasn\'t available at plugin load', () => {
+  // No `playSong` in windowExtras: at load time, window.playSong isn't a
+  // function yet, so _wrapPlaySongForView() no-ops (the install-order
+  // race a real host can hit if this plugin's script runs before the
+  // player binds window.playSong).
+  const chordr = freshPlugin({ addEventListener: () => {} });
+  assert.equal(typeof global.window.playSong, 'undefined');
+
+  // By the time a user can toggle the view, the app is fully up.
+  const original = async () => 'ok';
+  global.window.playSong = original;
+  global.window.highway = mockHighway();
+
+  chordr._internal.startView();
+
+  assert.notEqual(global.window.playSong, original, 'startView must retry the wrap');
+});

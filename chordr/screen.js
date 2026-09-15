@@ -544,6 +544,14 @@ if (!window[`__${PLUGIN_ID}_installed`]) {
     _buildViewOverlay();
     _connectLyricsSocket(highway);
     _viewLoop();
+    // _wrapPlaySongForView() already ran once at plugin load, but plugins
+    // load asynchronously relative to when core binds window.playSong —
+    // if this screen's script ran first, that install permanently no-op'd
+    // (it bails if window.playSong isn't a function yet). By the time a
+    // user can toggle the view at all, window.highway exists, so the app
+    // is fully up and window.playSong is guaranteed to be bound — retry
+    // the wrap here (it's idempotent via __chordr_viewPlaySongWrapped).
+    _wrapPlaySongForView();
     return true;
   };
 
@@ -579,15 +587,21 @@ if (!window[`__${PLUGIN_ID}_installed`]) {
     window[`__${PLUGIN_ID}_viewPlaySongWrapped`] = true;
     const original = window.playSong;
     window.playSong = async function (...args) {
-      const result = await original.apply(this, args);
+      // Clear stale lyrics BEFORE awaiting the new song's load (which can
+      // take seconds) — otherwise window.highway can already reflect the
+      // new song's chords/time while viewState.lyricLines still holds the
+      // previous song's lines, showing old lyrics against new playback.
       if (viewState.active) {
         if (viewState.ws) {
           viewState.ws.close();
           viewState.ws = null;
         }
         viewState.lyricLines = [];
-        if (window.highway) _connectLyricsSocket(window.highway);
       }
+      const result = await original.apply(this, args);
+      // Reconnect only after the new song has loaded, so
+      // getSongInfo()/getChords() reflect it, not the previous song.
+      if (viewState.active && window.highway) _connectLyricsSocket(window.highway);
       return result;
     };
   };
