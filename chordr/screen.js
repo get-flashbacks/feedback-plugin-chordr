@@ -576,6 +576,13 @@ if (!window[`__${PLUGIN_ID}_installed`]) {
         : null;
       if (!currentSongInfo || currentSongInfo.filename !== requestedFor) return;
       viewState.audioChords = chords;
+      // Detection resolves asynchronously, seconds in — the user is almost
+      // always still on whatever line was already showing, so idx ===
+      // lastRenderedLine and _viewLoop's line-change gate would otherwise
+      // skip re-rendering it, leaving the current line's chords empty
+      // until the next line change. Force one re-render so it picks up
+      // the newly-attached chords on the very next frame.
+      viewState.lastRenderedLine = -1;
     });
   };
 

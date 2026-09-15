@@ -504,6 +504,30 @@ test('maybeDetectChordsFromAudio populates viewState.audioChords when the chart 
   assert.deepEqual(viewState.audioChords, [{ t: 1, name: 'G' }]);
 });
 
+test('maybeDetectChordsFromAudio forces a re-render so the currently-displayed line picks up the newly-attached chords', async () => {
+  // Detection resolves asynchronously, seconds in — by then the user is
+  // almost always still on whatever line was already showing. Without
+  // resetting lastRenderedLine, viewLoop's line-change gate would leave
+  // that line rendered chord-less until the next line change.
+  const chordr = freshPlugin();
+  global.fetch = async (url) =>
+    url.startsWith('/api/plugins/')
+      ? fakeJsonResponse(true, { chords: [{ t: 1, name: 'G' }] })
+      : fakeAudioResponse();
+
+  const { viewState } = chordr._internal;
+  initViewState(viewState, { lastRenderedLine: 0 }); // already showing line 0
+  global.window.highway = mockHighway({
+    getChords: () => [],
+    getSongInfo: () => ({ filename: 'a.sloppak', audio_url: '/audio/a.mp3' }),
+  });
+
+  chordr._internal.maybeDetectChordsFromAudio(global.window.highway);
+  await flushAsync();
+
+  assert.equal(viewState.lastRenderedLine, -1);
+});
+
 test('maybeDetectChordsFromAudio discards a stale result if the song changed while detection was in flight', async () => {
   const chordr = freshPlugin();
   let resolveAudioFetch;

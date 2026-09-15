@@ -15,6 +15,7 @@ import tempfile
 from pathlib import Path
 
 from fastapi import FastAPI, Request
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse
 
 PLUGIN_ID = "chordr"
@@ -77,7 +78,12 @@ def setup(app: FastAPI, context: dict) -> None:
             with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
                 tmp.write(body)
                 tmp_path = tmp.name
-            chords = audio_chords.detect_chords(tmp_path)
+            # detect_chords (chroma-CQT over a full song) can take tens of
+            # seconds — run it in FastAPI's threadpool, not inline on the
+            # event loop, or it blocks every other request/WebSocket
+            # (including this view's own /ws/highway/... lyrics connection)
+            # for its whole duration.
+            chords = await run_in_threadpool(audio_chords.detect_chords, tmp_path)
         except Exception as exc:
             log.exception("%s: chord detection failed", PLUGIN_ID)
             return JSONResponse(
