@@ -609,7 +609,11 @@ if (!window[`__${PLUGIN_ID}_installed`]) {
     }
 
     const promise = detectChordsFromAudio(songInfo.audio_url).then((chords) => {
-      _audioChordsCache.set(requestedFor, chords); // replace the in-flight promise with its resolved value
+      if (chords) {
+        _audioChordsCache.set(requestedFor, chords); // resolved value replaces the in-flight promise
+      } else {
+        _audioChordsCache.delete(requestedFor); // transient failure — leave it retryable on a later open
+      }
       return chords;
     });
     _audioChordsCache.set(requestedFor, promise);

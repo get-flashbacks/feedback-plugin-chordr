@@ -618,6 +618,46 @@ test('maybeDetectChordsFromAudio does not re-fetch for a song whose detection is
   assert.deepEqual(viewState.audioChords, [{ t: 1, name: 'G' }]);
 });
 
+test('maybeDetectChordsFromAudio does not cache a failed detection, and retries (without crashing) on reopen', async () => {
+  // A failure resolves detectChordsFromAudio to null. Caching that null
+  // under the song's audio_url would mean a later reopen calls
+  // _attachAudioChordsWhenReady(null, ...), which used to access
+  // `null.then` synchronously and throw — breaking _startView() for the
+  // rest of the session on that song. It also permanently killed the
+  // audio-chords fallback for that song even after a transient failure
+  // (dropped fetch, 503 while a dependency was still installing).
+  const chordr = freshPlugin();
+  let fetchCalls = 0;
+  global.fetch = async (url) => {
+    fetchCalls++;
+    return url.startsWith('/api/plugins/')
+      ? fakeJsonResponse(false) // detect_chords endpoint fails
+      : fakeAudioResponse();
+  };
+
+  const { viewState } = chordr._internal;
+  initViewState(viewState);
+  const highway = mockHighway({
+    getChords: () => [],
+    getSongInfo: () => ({ audio_url: '/audio/a.mp3' }),
+  });
+  global.window.highway = highway;
+
+  // First open: detection runs and fails (fail-soft — no throw).
+  assert.doesNotThrow(() => chordr._internal.maybeDetectChordsFromAudio(highway));
+  await flushAsync();
+  assert.equal(fetchCalls, 2);
+  assert.equal(viewState.audioChords, null);
+
+  // Reopen: must not throw (the historical bug), and must actually retry
+  // rather than reusing a cached null forever.
+  viewState.audioChords = null;
+  assert.doesNotThrow(() => chordr._internal.maybeDetectChordsFromAudio(highway));
+  await flushAsync();
+
+  assert.equal(fetchCalls, 4, 'a failed detection must be retried on the next open, not cached forever');
+});
+
 test('maybeDetectChordsFromAudio does not start a second detection while one is already in flight for the same song', async () => {
   const chordr = freshPlugin();
   let audioFetchCalls = 0;
