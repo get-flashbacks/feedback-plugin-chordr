@@ -559,6 +559,32 @@ test('maybeDetectChordsFromAudio discards a stale result if the song changed whi
   assert.equal(viewState.audioChords, null, "must not attach song A's result once song B is active");
 });
 
+test('maybeDetectChordsFromAudio identifies songs by audio_url, not filename (song_info carries no filename field)', async () => {
+  // The real /ws/highway song_info payload has no `filename` key (see the
+  // WebSocket protocol reference) — audio_url is the only stable identity
+  // every format resolves to. A mock that hands out a `filename` the real
+  // payload never carries would let this pass even if the code keyed off
+  // `filename` and always got `undefined`, so this test's mocks omit it.
+  const chordr = freshPlugin();
+  global.fetch = async (url) =>
+    url.startsWith('/api/plugins/')
+      ? fakeJsonResponse(true, { chords: [{ t: 1, name: 'G' }] })
+      : fakeAudioResponse();
+
+  const { viewState } = chordr._internal;
+  initViewState(viewState);
+  const highway = mockHighway({
+    getChords: () => [],
+    getSongInfo: () => ({ audio_url: '/audio/a.mp3' }), // no `filename`
+  });
+  global.window.highway = highway;
+
+  chordr._internal.maybeDetectChordsFromAudio(highway);
+  await flushAsync();
+
+  assert.deepEqual(viewState.audioChords, [{ t: 1, name: 'G' }]);
+});
+
 test('maybeDetectChordsFromAudio does not re-fetch for a song whose detection is already resolved', async () => {
   const chordr = freshPlugin();
   let fetchCalls = 0;

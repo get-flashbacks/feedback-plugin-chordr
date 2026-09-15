@@ -555,8 +555,10 @@ if (!window[`__${PLUGIN_ID}_installed`]) {
     }
   };
 
-  // Cache keyed by song filename: a resolved chords array once detection
-  // finishes, or the in-flight Promise while it's still running. Module-
+  // Cache keyed by song audio_url (song_info carries no `filename` field —
+  // see the WebSocket protocol reference; audio_url is the identity every
+  // format resolves to): a resolved chords array once detection finishes,
+  // or the in-flight Promise while it's still running. Module-
   // level (not on viewState) so it survives the view being closed and
   // reopened for the same song — without it, every reopen re-downloaded
   // the audio and re-ran a tens-of-seconds CQT analysis from scratch, and
@@ -575,7 +577,7 @@ if (!window[`__${PLUGIN_ID}_installed`]) {
       const currentSongInfo = currentHighway && currentHighway.getSongInfo
         ? currentHighway.getSongInfo()
         : null;
-      if (!currentSongInfo || currentSongInfo.filename !== requestedFor) return;
+      if (!currentSongInfo || currentSongInfo.audio_url !== requestedFor) return;
       viewState.audioChords = chords;
       // Detection resolves asynchronously, seconds in — the user is almost
       // always still on whatever line was already showing, so idx ===
@@ -597,7 +599,7 @@ if (!window[`__${PLUGIN_ID}_installed`]) {
     const songInfo = highway.getSongInfo ? highway.getSongInfo() : null;
     if (!songInfo || !songInfo.audio_url) return;
 
-    const requestedFor = songInfo.filename;
+    const requestedFor = songInfo.audio_url;
 
     if (_audioChordsCache.has(requestedFor)) {
       // Already resolved, or still in flight, for this exact song —
