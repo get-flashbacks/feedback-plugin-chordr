@@ -22,5 +22,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   already-sung words highlighted. Adds `window.chordr.buildLyricLines()`
   for parsing the `lyrics` WS message's `-`/`+` word-join/line-break
   markers. (#3)
+- Audio-based chord detection: a fallback chord source for songs whose
+  chart has no note/chord data at all. New `POST
+  /api/plugins/chordr/detect_chords` route runs chroma-CQT + template
+  matching (`librosa`) on uploaded audio; the chord/lyrics view triggers
+  it automatically, client-side, only when the chart has no chords.
+  Adds `window.chordr.detectChordsFromAudio()`. (#5)
 
 <!-- Add entries under Added, Changed, Deprecated, Removed, Fixed, or Security as changes land. -->

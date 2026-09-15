@@ -97,6 +97,16 @@ function initViewState(viewState, overrides) {
   );
 }
 
+function fakeAudioResponse(ok = true, blobType = 'audio/mpeg') {
+  return { ok, blob: async () => ({ type: blobType }) };
+}
+
+function fakeJsonResponse(ok = true, json = {}) {
+  return { ok, json: async () => json };
+}
+
+const flushAsync = () => new Promise((resolve) => setTimeout(resolve, 0));
+
 // ── _assignChordsToLine ─────────────────────────────────────────────
 
 test('assignChordsToLine maps a chord to the nearest word at-or-before its time', () => {
@@ -400,4 +410,301 @@ test('startView retries wrapping playSong if it wasn\'t available at plugin load
   chordr._internal.startView();
 
   assert.notEqual(global.window.playSong, original, 'startView must retry the wrap');
+});
+
+// ── detectChordsFromAudio (chordr#5: audio-based fallback source) ──
+
+test('detectChordsFromAudio fetches the audio then posts it, returning the detected chords', async () => {
+  const chordr = freshPlugin();
+  const calls = [];
+  global.fetch = async (url, opts) => {
+    calls.push({ url, opts });
+    return calls.length === 1
+      ? fakeAudioResponse()
+      : fakeJsonResponse(true, { chords: [{ t: 0, name: 'C' }] });
+  };
+
+  const chords = await chordr.detectChordsFromAudio('/audio/song.mp3');
+
+  assert.deepEqual(chords, [{ t: 0, name: 'C' }]);
+  assert.equal(calls[0].url, '/audio/song.mp3');
+  assert.equal(calls[1].url, '/api/plugins/chordr/detect_chords');
+  assert.equal(calls[1].opts.method, 'POST');
+});
+
+test('detectChordsFromAudio returns null when the audio fetch fails', async () => {
+  const chordr = freshPlugin();
+  global.fetch = async () => fakeAudioResponse(false);
+
+  assert.equal(await chordr.detectChordsFromAudio('/audio/song.mp3'), null);
+});
+
+test('detectChordsFromAudio returns null when the detect_chords endpoint fails', async () => {
+  const chordr = freshPlugin();
+  let n = 0;
+  global.fetch = async () => {
+    n++;
+    return n === 1 ? fakeAudioResponse() : fakeJsonResponse(false);
+  };
+
+  assert.equal(await chordr.detectChordsFromAudio('/audio/song.mp3'), null);
+});
+
+test('detectChordsFromAudio fails soft on a network error', async () => {
+  const chordr = freshPlugin();
+  global.fetch = async () => { throw new Error('boom'); };
+
+  assert.equal(await chordr.detectChordsFromAudio('/audio/song.mp3'), null);
+});
+
+test('detectChordsFromAudio returns null without an audioUrl', async () => {
+  const chordr = freshPlugin();
+  global.fetch = async () => { throw new Error('should not be called'); };
+
+  assert.equal(await chordr.detectChordsFromAudio(null), null);
+});
+
+// ── maybeDetectChordsFromAudio (wiring into the view) ────────────────
+
+test('maybeDetectChordsFromAudio does nothing when the chart already has chords', () => {
+  const chordr = freshPlugin();
+  let fetchCalled = false;
+  global.fetch = async () => { fetchCalled = true; return fakeAudioResponse(); };
+  const { viewState } = chordr._internal;
+  initViewState(viewState);
+
+  const highway = mockHighway({
+    getChords: () => [{ t: 0, id: 0, notes: [] }],
+    getSongInfo: () => ({ filename: 'a.sloppak', audio_url: '/audio/a.mp3' }),
+  });
+
+  chordr._internal.maybeDetectChordsFromAudio(highway);
+
+  assert.equal(fetchCalled, false);
+  assert.equal(viewState.audioChords, null);
+});
+
+test('maybeDetectChordsFromAudio populates viewState.audioChords when the chart has none', async () => {
+  const chordr = freshPlugin();
+  global.fetch = async (url) =>
+    url.startsWith('/api/plugins/')
+      ? fakeJsonResponse(true, { chords: [{ t: 1, name: 'G' }] })
+      : fakeAudioResponse();
+
+  const { viewState } = chordr._internal;
+  initViewState(viewState);
+  global.window.highway = mockHighway({
+    getChords: () => [],
+    getSongInfo: () => ({ filename: 'a.sloppak', audio_url: '/audio/a.mp3' }),
+  });
+
+  chordr._internal.maybeDetectChordsFromAudio(global.window.highway);
+  await flushAsync();
+
+  assert.deepEqual(viewState.audioChords, [{ t: 1, name: 'G' }]);
+});
+
+test('maybeDetectChordsFromAudio forces a re-render so the currently-displayed line picks up the newly-attached chords', async () => {
+  // Detection resolves asynchronously, seconds in — by then the user is
+  // almost always still on whatever line was already showing. Without
+  // resetting lastRenderedLine, viewLoop's line-change gate would leave
+  // that line rendered chord-less until the next line change.
+  const chordr = freshPlugin();
+  global.fetch = async (url) =>
+    url.startsWith('/api/plugins/')
+      ? fakeJsonResponse(true, { chords: [{ t: 1, name: 'G' }] })
+      : fakeAudioResponse();
+
+  const { viewState } = chordr._internal;
+  initViewState(viewState, { lastRenderedLine: 0 }); // already showing line 0
+  global.window.highway = mockHighway({
+    getChords: () => [],
+    getSongInfo: () => ({ filename: 'a.sloppak', audio_url: '/audio/a.mp3' }),
+  });
+
+  chordr._internal.maybeDetectChordsFromAudio(global.window.highway);
+  await flushAsync();
+
+  assert.equal(viewState.lastRenderedLine, -1);
+});
+
+test('maybeDetectChordsFromAudio discards a stale result if the song changed while detection was in flight', async () => {
+  const chordr = freshPlugin();
+  let resolveAudioFetch;
+  global.fetch = async (url) => {
+    if (url.startsWith('/api/plugins/')) return fakeJsonResponse(true, { chords: [{ t: 1, name: 'G' }] });
+    return new Promise((resolve) => { resolveAudioFetch = () => resolve(fakeAudioResponse()); });
+  };
+
+  const { viewState } = chordr._internal;
+  initViewState(viewState);
+  const songA = mockHighway({
+    getChords: () => [],
+    getSongInfo: () => ({ filename: 'a.sloppak', audio_url: '/audio/a.mp3' }),
+  });
+  global.window.highway = songA;
+
+  chordr._internal.maybeDetectChordsFromAudio(songA);
+
+  // Song changes before the in-flight audio fetch resolves.
+  global.window.highway = mockHighway({
+    getChords: () => [],
+    getSongInfo: () => ({ filename: 'b.sloppak', audio_url: '/audio/b.mp3' }),
+  });
+
+  resolveAudioFetch();
+  await flushAsync();
+  await flushAsync();
+
+  assert.equal(viewState.audioChords, null, "must not attach song A's result once song B is active");
+});
+
+test('maybeDetectChordsFromAudio identifies songs by audio_url, not filename (song_info carries no filename field)', async () => {
+  // The real /ws/highway song_info payload has no `filename` key (see the
+  // WebSocket protocol reference) — audio_url is the only stable identity
+  // every format resolves to. A mock that hands out a `filename` the real
+  // payload never carries would let this pass even if the code keyed off
+  // `filename` and always got `undefined`, so this test's mocks omit it.
+  const chordr = freshPlugin();
+  global.fetch = async (url) =>
+    url.startsWith('/api/plugins/')
+      ? fakeJsonResponse(true, { chords: [{ t: 1, name: 'G' }] })
+      : fakeAudioResponse();
+
+  const { viewState } = chordr._internal;
+  initViewState(viewState);
+  const highway = mockHighway({
+    getChords: () => [],
+    getSongInfo: () => ({ audio_url: '/audio/a.mp3' }), // no `filename`
+  });
+  global.window.highway = highway;
+
+  chordr._internal.maybeDetectChordsFromAudio(highway);
+  await flushAsync();
+
+  assert.deepEqual(viewState.audioChords, [{ t: 1, name: 'G' }]);
+});
+
+test('maybeDetectChordsFromAudio does not re-fetch for a song whose detection is already resolved', async () => {
+  const chordr = freshPlugin();
+  let fetchCalls = 0;
+  global.fetch = async (url) => {
+    fetchCalls++;
+    return url.startsWith('/api/plugins/')
+      ? fakeJsonResponse(true, { chords: [{ t: 1, name: 'G' }] })
+      : fakeAudioResponse();
+  };
+
+  const { viewState } = chordr._internal;
+  initViewState(viewState);
+  const highway = mockHighway({
+    getChords: () => [],
+    getSongInfo: () => ({ filename: 'a.sloppak', audio_url: '/audio/a.mp3' }),
+  });
+  global.window.highway = highway;
+
+  // First open: real detection runs (2 fetches — audio, then detect_chords).
+  chordr._internal.maybeDetectChordsFromAudio(highway);
+  await flushAsync();
+  assert.equal(fetchCalls, 2);
+  assert.deepEqual(viewState.audioChords, [{ t: 1, name: 'G' }]);
+
+  // Simulate closing and reopening the view for the same song.
+  viewState.audioChords = null;
+  chordr._internal.maybeDetectChordsFromAudio(highway);
+  await flushAsync();
+
+  assert.equal(fetchCalls, 2, 'reopening the same song must reuse the cached result, not re-fetch');
+  assert.deepEqual(viewState.audioChords, [{ t: 1, name: 'G' }]);
+});
+
+test('maybeDetectChordsFromAudio does not cache a failed detection, and retries (without crashing) on reopen', async () => {
+  // A failure resolves detectChordsFromAudio to null. Caching that null
+  // under the song's audio_url would mean a later reopen calls
+  // _attachAudioChordsWhenReady(null, ...), which used to access
+  // `null.then` synchronously and throw — breaking _startView() for the
+  // rest of the session on that song. It also permanently killed the
+  // audio-chords fallback for that song even after a transient failure
+  // (dropped fetch, 503 while a dependency was still installing).
+  const chordr = freshPlugin();
+  let fetchCalls = 0;
+  global.fetch = async (url) => {
+    fetchCalls++;
+    return url.startsWith('/api/plugins/')
+      ? fakeJsonResponse(false) // detect_chords endpoint fails
+      : fakeAudioResponse();
+  };
+
+  const { viewState } = chordr._internal;
+  initViewState(viewState);
+  const highway = mockHighway({
+    getChords: () => [],
+    getSongInfo: () => ({ audio_url: '/audio/a.mp3' }),
+  });
+  global.window.highway = highway;
+
+  // First open: detection runs and fails (fail-soft — no throw).
+  assert.doesNotThrow(() => chordr._internal.maybeDetectChordsFromAudio(highway));
+  await flushAsync();
+  assert.equal(fetchCalls, 2);
+  assert.equal(viewState.audioChords, null);
+
+  // Reopen: must not throw (the historical bug), and must actually retry
+  // rather than reusing a cached null forever.
+  viewState.audioChords = null;
+  assert.doesNotThrow(() => chordr._internal.maybeDetectChordsFromAudio(highway));
+  await flushAsync();
+
+  assert.equal(fetchCalls, 4, 'a failed detection must be retried on the next open, not cached forever');
+});
+
+test('maybeDetectChordsFromAudio does not start a second detection while one is already in flight for the same song', async () => {
+  const chordr = freshPlugin();
+  let audioFetchCalls = 0;
+  let resolveAudioFetch;
+  global.fetch = async (url) => {
+    if (url.startsWith('/api/plugins/')) return fakeJsonResponse(true, { chords: [{ t: 1, name: 'G' }] });
+    audioFetchCalls++;
+    return new Promise((resolve) => { resolveAudioFetch = () => resolve(fakeAudioResponse()); });
+  };
+
+  const { viewState } = chordr._internal;
+  initViewState(viewState);
+  const highway = mockHighway({
+    getChords: () => [],
+    getSongInfo: () => ({ filename: 'a.sloppak', audio_url: '/audio/a.mp3' }),
+  });
+  global.window.highway = highway;
+
+  // Simulate closing and reopening the view before the first detection resolves.
+  chordr._internal.maybeDetectChordsFromAudio(highway);
+  chordr._internal.maybeDetectChordsFromAudio(highway);
+
+  assert.equal(audioFetchCalls, 1, 'a second call while detection is in flight must not start a duplicate analysis');
+
+  resolveAudioFetch();
+  await flushAsync();
+  await flushAsync();
+
+  assert.deepEqual(viewState.audioChords, [{ t: 1, name: 'G' }]);
+});
+
+// ── viewLoop falls back to audioChords ───────────────────────────────
+
+test('viewLoop falls back to audioChords when the chart has no chords', () => {
+  const chordr = freshPlugin();
+  const { viewState } = chordr._internal;
+  initViewState(viewState, {
+    lyricLines: [{ startT: 0, endT: 10, words: [{ text: 'hi', t: 0 }] }],
+  });
+  viewState.audioChords = [{ t: 0, name: 'Dm' }];
+
+  global.window.highway = mockHighway({ getTime: () => 1, getChords: () => [] });
+
+  chordr._internal.viewLoop();
+
+  const wordWrap = viewState.linesEl.children[0];
+  const chordLabel = wordWrap.children.find((c) => c.className === 'chordr-chord-label');
+  assert.ok(chordLabel, 'expected a chord label built from the audio-detected chord');
+  assert.equal(chordLabel.textContent, 'Dm');
 });
