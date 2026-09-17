@@ -52,7 +52,16 @@ def _build_templates():
     templates = []
     for root in range(12):
         for suffix, intervals in CHORD_QUALITIES:
-            active = [(root + iv) % 12 for iv in intervals]
+            # Sorted ascending (not interval order) so the dot-product sum
+            # below always visits bins in the same order the old dense
+            # zip(chroma_vec, template) implementation did (0..11) — a root
+            # that wraps past bin 11 (e.g. root=10, intervals=[0,4,8] ->
+            # bins [10,2,6]) would otherwise sum in a different order.
+            # Floating-point addition isn't associative, so an unsorted sum
+            # can differ from the dense version by a ULP — enough, with the
+            # strict `>` tie-break below, to flip which of two near-tied
+            # templates wins.
+            active = sorted((root + iv) % 12 for iv in intervals)
             templates.append((NOTE_NAMES[root] + suffix, active, len(intervals) ** 0.5))
     return templates
 

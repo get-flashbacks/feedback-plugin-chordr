@@ -56,6 +56,22 @@ class ClassifyChromaFrameTests(unittest.TestCase):
         self.assertIsNone(name)
         self.assertGreaterEqual(score, 0.55, "sanity: this frame is a coverage rejection, not a confidence one")
 
+    def test_matches_the_dense_bin0to11_summation_order_for_a_wrapping_root(self):
+        # A root whose intervals wrap past bin 11 (e.g. root=10: bins
+        # 10, 2, 6) sums those bins in a different order than the dense
+        # 0..11 zip used to, unless _build_templates sorts the active
+        # bins ascending — floating-point addition isn't associative, so
+        # an unsorted sum can differ by a ULP and, with the strict `>`
+        # tie-break, flip which of two near-tied templates wins. This
+        # exact vector (C/E/G# aug, near-tied against another root's aug
+        # template) regressed to "Eaug" instead of "Caug" before the fix.
+        vec = [0.0] * 12
+        vec[0] = 0.8806605959099073   # C
+        vec[4] = 0.7897293341937999   # E
+        vec[8] = 0.83418962891688     # G#
+        name, _ = audio_chords.classify_chroma_frame(vec)
+        self.assertEqual(name, "Caug")
+
 
 class DetectChordsFromChromaTests(unittest.TestCase):
     def test_returns_one_event_per_stable_chord_segment(self):
