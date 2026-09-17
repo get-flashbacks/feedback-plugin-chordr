@@ -6,6 +6,7 @@ tests use synthetic chroma vectors directly — no real audio needed.
 Only detect_chords() itself (untested here) touches librosa.
 """
 
+import random
 import sys
 import unittest
 from pathlib import Path
@@ -71,6 +72,60 @@ class ClassifyChromaFrameTests(unittest.TestCase):
         vec[8] = 0.83418962891688     # G#
         name, _ = audio_chords.classify_chroma_frame(vec)
         self.assertEqual(name, "Caug")
+
+
+def _dense_classify_chroma_frame(chroma_vec, min_energy=0.05, min_confidence=0.55, min_coverage=0.6):
+    """Reference implementation matching the pre-refactor dense-vector
+    approach (a full 12-element template per (root, quality), dot-
+    producted via zip against the query) — used only to assert the
+    sparse active-bin-index implementation in classify_chroma_frame
+    stays bit-for-bit equivalent to it. Deliberately duplicated here
+    rather than imported: the whole point is an independent oracle.
+    """
+    total_energy = sum(chroma_vec)
+    if total_energy < min_energy:
+        return None, 0.0
+    query_norm = sum(x * x for x in chroma_vec) ** 0.5
+    if query_norm == 0:
+        return None, 0.0
+
+    best_name, best_score, best_dot = None, -1.0, 0.0
+    for root in range(12):
+        for suffix, intervals in audio_chords.CHORD_QUALITIES:
+            vec = [0.0] * 12
+            for iv in intervals:
+                vec[(root + iv) % 12] = 1.0
+            template_norm = sum(vec) ** 0.5
+            dot = sum(x * y for x, y in zip(chroma_vec, vec))
+            score = dot / (query_norm * template_norm) if template_norm else 0.0
+            if score > best_score:
+                best_name, best_score, best_dot = audio_chords.NOTE_NAMES[root] + suffix, score, dot
+    if best_score < min_confidence:
+        return None, best_score
+    if best_dot / total_energy < min_coverage:
+        return None, best_score
+    return best_name, best_score
+
+
+class SparseTemplateEquivalenceTests(unittest.TestCase):
+    """classify_chroma_frame's active-bin-index implementation must stay
+    bit-for-bit equivalent to the dense zip/multiply approach it
+    replaced — fuzzed against a large random sample rather than a
+    handful of hand-picked vectors, since the failure mode (floating-
+    point summation order) only shows up for specific value/root
+    combinations. Seeded for determinism.
+    """
+
+    def test_matches_the_dense_reference_implementation_across_random_vectors(self):
+        rng = random.Random(20260917)
+        mismatches = []
+        for _ in range(2000):
+            vec = [rng.random() if rng.random() < 0.5 else 0.0 for _ in range(12)]
+            sparse_result = audio_chords.classify_chroma_frame(vec)
+            dense_result = _dense_classify_chroma_frame(vec)
+            if sparse_result != dense_result:
+                mismatches.append((vec, sparse_result, dense_result))
+        self.assertEqual(mismatches, [], f"{len(mismatches)} sparse/dense mismatch(es), e.g. {mismatches[:1]}")
 
 
 class DetectChordsFromChromaTests(unittest.TestCase):
