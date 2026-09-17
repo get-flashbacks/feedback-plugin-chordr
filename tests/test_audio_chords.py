@@ -117,7 +117,7 @@ class SparseTemplateEquivalenceTests(unittest.TestCase):
     """
 
     def test_matches_the_dense_reference_implementation_across_random_vectors(self):
-        rng = random.Random(20260917)
+        rng = random.Random(20260917)  # nosec B311 — test fixture generation, not security-sensitive; seeded for reproducibility
         mismatches = []
         for _ in range(2000):
             vec = [rng.random() if rng.random() < 0.5 else 0.0 for _ in range(12)]
