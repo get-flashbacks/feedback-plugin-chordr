@@ -61,8 +61,16 @@ def _build_templates():
             # can differ from the dense version by a ULP — enough, with the
             # strict `>` tie-break below, to flip which of two near-tied
             # templates wins.
-            active = sorted((root + iv) % 12 for iv in intervals)
-            templates.append((NOTE_NAMES[root] + suffix, active, len(intervals) ** 0.5))
+            # A set, not just sorted(): the dense vec[(root+iv)%12]=1.0
+            # implementation silently collapsed a repeated/aliased
+            # interval to one bin (overwrite, not accumulate), so the
+            # norm (sqrt of popcount) must match that — a plain list
+            # would both double-count the bin's chroma value in the dot
+            # product and overstate the norm for any quality whose
+            # intervals happened to collide mod 12 (none do today, but
+            # nothing enforces that as CHORD_QUALITIES grows).
+            active = sorted({(root + iv) % 12 for iv in intervals})
+            templates.append((NOTE_NAMES[root] + suffix, active, len(active) ** 0.5))
     return templates
 
 
