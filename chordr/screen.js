@@ -557,18 +557,18 @@ if (!window[`__${PLUGIN_ID}_installed`]) {
 
   // Cache keyed by song audio_url (song_info carries no `filename` field —
   // see the WebSocket protocol reference; audio_url is the identity every
-  // format resolves to): a resolved chords array once detection finishes,
-  // or the in-flight Promise while it's still running. Module-
-  // level (not on viewState) so it survives the view being closed and
-  // reopened for the same song — without it, every reopen re-downloaded
-  // the audio and re-ran a tens-of-seconds CQT analysis from scratch, and
-  // closing+reopening while a detection was still running could fire a
-  // second, fully concurrent duplicate analysis for the same song.
+  // format resolves to): always holds the detection Promise — in flight,
+  // or already settled (an already-resolved promise's `.then()` behaves
+  // the same as a plain value's, so there's no need to unwrap it back to
+  // a raw array once it settles). Module-level (not on viewState) so it
+  // survives the view being closed and reopened for the same song —
+  // without it, every reopen re-downloaded the audio and re-ran a tens-
+  // of-seconds CQT analysis from scratch, and closing+reopening while a
+  // detection was still running could fire a second, fully concurrent
+  // duplicate analysis for the same song.
   const _audioChordsCache = new Map();
 
-  const _attachAudioChordsWhenReady = (promiseOrChords, requestedFor) => {
-    const promise =
-      typeof promiseOrChords.then === "function" ? promiseOrChords : Promise.resolve(promiseOrChords);
+  const _attachAudioChordsWhenReady = (promise, requestedFor) => {
     promise.then((chords) => {
       // The user may have switched songs (or the view may have stopped)
       // while this was in flight — don't attach stale results.
@@ -609,11 +609,11 @@ if (!window[`__${PLUGIN_ID}_installed`]) {
     }
 
     const promise = detectChordsFromAudio(songInfo.audio_url).then((chords) => {
-      if (chords) {
-        _audioChordsCache.set(requestedFor, chords); // resolved value replaces the in-flight promise
-      } else {
-        _audioChordsCache.delete(requestedFor); // transient failure — leave it retryable on a later open
-      }
+      // A falsy (failed) result stays out of the cache so a later open
+      // retries instead of reusing — and re-`.then()`-ing — a dead
+      // result. A successful result needs no action here: the promise
+      // itself, already cached below, is what later opens reuse.
+      if (!chords) _audioChordsCache.delete(requestedFor);
       return chords;
     });
     _audioChordsCache.set(requestedFor, promise);

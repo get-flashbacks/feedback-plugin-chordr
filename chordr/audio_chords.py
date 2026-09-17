@@ -42,17 +42,18 @@ CHORD_QUALITIES = [
 
 
 def _build_templates():
-    """Precompute a 12-bin binary template vector + its Euclidean norm per
-    (root, quality). A binary template's norm is just sqrt(popcount), no
-    need to sum-of-squares it repeatedly at match time.
+    """Precompute each (root, quality) template's active bin indices +
+    Euclidean norm. A binary template's norm is just sqrt(popcount), no
+    need to sum-of-squares it repeatedly at match time. Templates are
+    sparse (2-5 of 12 bins active), so storing indices instead of a dense
+    12-element vector turns each per-template dot product at match time
+    into a short index-sum instead of a full-width zip/multiply.
     """
     templates = []
     for root in range(12):
         for suffix, intervals in CHORD_QUALITIES:
-            vec = [0.0] * 12
-            for iv in intervals:
-                vec[(root + iv) % 12] = 1.0
-            templates.append((NOTE_NAMES[root] + suffix, vec, len(intervals) ** 0.5))
+            active = [(root + iv) % 12 for iv in intervals]
+            templates.append((NOTE_NAMES[root] + suffix, active, len(intervals) ** 0.5))
     return templates
 
 
@@ -81,8 +82,8 @@ def classify_chroma_frame(chroma_vec, min_energy=0.05, min_confidence=0.55, min_
         return None, 0.0
 
     best_name, best_score, best_dot = None, -1.0, 0.0
-    for name, template, template_norm in _TEMPLATES:
-        dot = sum(x * y for x, y in zip(chroma_vec, template))
+    for name, active_bins, template_norm in _TEMPLATES:
+        dot = sum(chroma_vec[i] for i in active_bins)
         score = dot / (query_norm * template_norm) if template_norm else 0.0
         if score > best_score:
             best_name, best_score, best_dot = name, score, dot
@@ -118,10 +119,10 @@ def _smooth_labels(labels, min_run_frames):
     merged = []
     for run in runs:
         length = run[2] - run[1]
-        if length < min_run_frames and merged:
-            merged[-1][2] = run[2]
-        elif length < min_run_frames:
-            pass  # leading short blip with nothing to merge into — drop it.
+        if length < min_run_frames:
+            if merged:
+                merged[-1][2] = run[2]
+            # else: leading short blip with nothing to merge into — drop it.
         elif merged and merged[-1][0] == run[0]:
             # Absorbing a short blip can leave the run before it and the
             # run after it sharing the same label (e.g. C, [blip], C) —
