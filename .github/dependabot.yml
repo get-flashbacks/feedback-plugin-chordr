@@ -25,7 +25,12 @@ updates:
     schedule:
       interval: "monthly"
     open-pull-requests-limit: 5
-    versioning-strategy: "increase-if-necessary"
+    # requirements.txt here only has unbounded lower constraints
+    # (librosa>=0.10.1, etc.) and there's no lockfile — every newer
+    # release already satisfies those, so "increase-if-necessary"
+    # would never open a PR. "increase" always advances the floor
+    # version instead, so scheduled checks actually do something.
+    versioning-strategy: "increase"
     # Same automation-scope clarification as above: excluded from the
     # major-version ignore, not auto-merged.
     ignore:
