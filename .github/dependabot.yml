@@ -1,0 +1,37 @@
+version: 2
+updates:
+  # Keep GitHub Actions up to date. Dependabot opens a PR bumping each
+  # action to its next tagged release (or resolves a SHA pin to the
+  # SHA behind a newer tag, for repos that pin by commit).
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "monthly"
+    open-pull-requests-limit: 5
+    # Patch/minor bumps get a PR opened normally; major version bumps
+    # (which can change an action's inputs/outputs) are excluded
+    # entirely, so they never get a PR without a human deciding to
+    # bump manually. No auto-merge is configured in this repo — every
+    # Dependabot PR, including patch/minor ones, still needs a human
+    # to review and merge it.
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
+
+  # Python dependencies declared in chordr/requirements.txt.
+  - package-ecosystem: "pip"
+    directory: "/chordr"
+    schedule:
+      interval: "monthly"
+    open-pull-requests-limit: 5
+    # requirements.txt here only has unbounded lower constraints
+    # (librosa>=0.10.1, etc.) and there's no lockfile — every newer
+    # release already satisfies those, so "increase-if-necessary"
+    # would never open a PR. "increase" always advances the floor
+    # version instead, so scheduled checks actually do something.
+    versioning-strategy: "increase"
+    # Same automation-scope clarification as above: excluded from the
+    # major-version ignore, not auto-merged.
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
