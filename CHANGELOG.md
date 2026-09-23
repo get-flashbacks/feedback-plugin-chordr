@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.5.0
+
+- Add keys-first chord arrangement generation with two-hand MIDI voicings,
+  slash-bass support, durations, and voice leading.
+- Add guitar arrangement generation with tuning-aware playable fret shapes.
+- Accept both audio detector `{t, name}` events and chart chord/template pairs.
+
 All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),

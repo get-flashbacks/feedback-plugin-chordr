@@ -46,6 +46,15 @@ window.chordr.identifyChord(chordNotes, {
   isBass,
 });
 window.chordr.identifyPianoChord(midiNotes);
+window.chordr.generateChordArrangement(chords, {
+  instrument: "keys", // default; or "guitar"
+  duration: 180,
+  chordTemplates,
+});
+await window.chordr.generateArrangementFromAudio(audioUrl, {
+  instrument: "keys",
+  duration: 180,
+});
 window.chordr.identifyFromHighway(chordNotes, highway);
 window.chordr.generateChordTemplates(chords, existingTemplates, {
   tuning,
@@ -59,6 +68,27 @@ window.chordr.generateChordTemplates(chords, existingTemplates, {
 tolerates `{ string, fret }` objects. It returns `null` when the pitch-class
 set does not match a supported chord quality. See `CHORD_QUALITIES` in
 `chordr/screen.js`.
+
+`generateChordArrangement(chords, options)` turns named harmony events such as
+`[{t: 0, name: "C"}, {t: 2, name: "G/B"}]` into a playable arrangement. Keys
+is the default and primary output: each note is `{t, midi, sus, hand}` with a
+compact right-hand voicing, a left-hand root/slash bass, and voice leading
+between changes. `{instrument: "guitar"}` instead returns `{t, s, f, sus}`
+notes plus the selected fret shapes. Chart chords without an inline `name` can
+use `options.chordTemplates` (their `id` indexes that array), so the API works
+with authored charts and the audio detector's named events alike. The function
+does not mutate its inputs.
+
+The result is deliberately an arrangement payload rather than an automatic
+`chart-transform`: the host transform contract can replace notes but cannot
+change instrument type or create a new arrangement. An editor/importer should
+materialize this payload as a separate Keys or Guitar arrangement, leaving the
+song's original part intact.
+
+`generateArrangementFromAudio(audioUrl, options)` is the end-to-end fallback
+for a song with no authored piano part: it runs Chordr's existing audio chord
+detection and feeds those harmony events into the same keys-first generator.
+It returns `null` if audio detection fails.
 
 `generateChordTemplates(chords, existingTemplates, ctx)` takes the wire-shape
 `chords` array (`[{ id, notes: [{s,f}, ...] }, ...]`) and the current
@@ -104,6 +134,7 @@ neighbors) into chord segments.
 ```bash
 node tests/chord_analysis.test.js
 node tests/generate_chord_templates.test.js
+node tests/generate_arrangement.test.js
 node tests/build_lyric_lines.test.js
 node tests/chord_lyrics_view.test.js
 python3 -m unittest tests/test_audio_chords.py
