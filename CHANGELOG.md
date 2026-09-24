@@ -6,6 +6,14 @@
   slash-bass support, durations, and voice leading.
 - Add guitar arrangement generation with tuning-aware playable fret shapes.
 - Accept both audio detector `{t, name}` events and chart chord/template pairs.
+- Add `generateAccompanimentFromLyrics(filename, options)`: a third
+  arrangement-generation path that harmonizes a song's sung melody (read
+  from lyrics_karaoke's canonical `/playback` payload) into a backing chord
+  sequence — key estimation via a Krumhansl-Schmuckler-style pitch-class
+  correlation, then a windowed best-fit diatonic triad per chord change —
+  and feeds it into the existing keys/guitar generator. Covers a song whose
+  only harmonic information is its vocal line: no chord chart, no full-mix
+  audio worth chord-detecting.
 
 All notable changes to this project will be documented in this file.
 

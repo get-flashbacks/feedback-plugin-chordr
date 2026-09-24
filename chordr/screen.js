@@ -736,6 +736,163 @@ if (!window[`__${PLUGIN_ID}_installed`]) {
     return chords ? generateChordArrangement(chords, options) : null;
   };
 
+  // ── Melody-to-accompaniment (via lyrics_karaoke) ────────────────────────
+  // A third generation path alongside chart chords and audio chord
+  // detection: for a song whose only harmonic information is its sung
+  // melody (a Vocals arrangement with synced lyrics + pitch, no chord
+  // chart and no full-mix audio worth running chord detection on), derive
+  // a backing accompaniment straight from the melody notes lyrics_karaoke
+  // already extracted. This is a monophonic-melody harmonization problem,
+  // not a chord-detection one: we pick diatonic chords that best support
+  // the sung notes, not chords already sounding in a recording.
+
+  // Krumhansl-Kessler key profiles (rotated per candidate tonic), used only
+  // to pick a plausible key center from the melody's own pitch-class
+  // durations — this is a coarse heuristic, not music-theoretic ground
+  // truth, and is expected to misfire on melodies that modulate or that
+  // are modal/pentatonic enough to fit multiple keys equally well.
+  const KK_MAJOR_PROFILE = [6.35, 2.23, 3.48, 2.33, 4.38, 4.09, 2.52, 5.19, 2.39, 3.66, 2.29, 2.88];
+  const KK_MINOR_PROFILE = [6.33, 2.68, 3.52, 5.38, 2.60, 3.53, 2.54, 4.75, 3.98, 2.69, 3.34, 3.17];
+
+  // Diatonic triads by scale degree (root offset in semitones from tonic,
+  // quality suffix matching CHORD_QUALITIES). Degree seven is the
+  // half-diminished/diminished triad in both modes' natural form.
+  const MAJOR_DEGREE_TRIADS = [
+    { offset: 0, suffix: "" }, { offset: 2, suffix: "m" }, { offset: 4, suffix: "m" },
+    { offset: 5, suffix: "" }, { offset: 7, suffix: "" }, { offset: 9, suffix: "m" },
+    { offset: 11, suffix: "dim" },
+  ];
+  const MINOR_DEGREE_TRIADS = [
+    { offset: 0, suffix: "m" }, { offset: 2, suffix: "dim" }, { offset: 3, suffix: "" },
+    { offset: 5, suffix: "m" }, { offset: 7, suffix: "m" }, { offset: 8, suffix: "" },
+    { offset: 10, suffix: "" },
+  ];
+
+  function _pitchClassDurations(tokens) {
+    const weights = new Array(12).fill(0);
+    for (const tok of tokens) {
+      const pc = ((Math.round(tok.midi) % 12) + 12) % 12;
+      weights[pc] += Math.max(0.05, Number(tok.duration) || 0.05);
+    }
+    return weights;
+  }
+
+  function _correlate(a, b) {
+    const meanA = a.reduce((s, v) => s + v, 0) / a.length;
+    const meanB = b.reduce((s, v) => s + v, 0) / b.length;
+    let num = 0, denomA = 0, denomB = 0;
+    for (let i = 0; i < a.length; i++) {
+      const da = a[i] - meanA, db = b[i] - meanB;
+      num += da * db; denomA += da * da; denomB += db * db;
+    }
+    const denom = Math.sqrt(denomA * denomB);
+    return denom > 0 ? num / denom : 0;
+  }
+
+  function _estimateKey(tokens) {
+    const weights = _pitchClassDurations(tokens);
+    let best = { root: 0, mode: "major", score: -Infinity };
+    for (let root = 0; root < 12; root++) {
+      const rotated = weights.slice(root).concat(weights.slice(0, root));
+      const majorScore = _correlate(rotated, KK_MAJOR_PROFILE);
+      const minorScore = _correlate(rotated, KK_MINOR_PROFILE);
+      if (majorScore > best.score) best = { root, mode: "major", score: majorScore };
+      if (minorScore > best.score) best = { root, mode: "minor", score: minorScore };
+    }
+    return { root: best.root, mode: best.mode };
+  }
+
+  function _diatonicChords(key) {
+    const degrees = key.mode === "minor" ? MINOR_DEGREE_TRIADS : MAJOR_DEGREE_TRIADS;
+    return degrees.map((d) => {
+      const root = (key.root + d.offset) % 12;
+      const intervals = CHORD_INTERVALS_BY_SUFFIX.get(d.suffix.toLowerCase());
+      return {
+        root, suffix: d.suffix,
+        pitchClasses: intervals.map((iv) => (root + iv) % 12),
+      };
+    });
+  }
+
+  // Groups melody tokens into fixed windows and, per window, scores every
+  // diatonic triad by how much of the window's (duration-weighted) melody
+  // content it covers — the sung notes are treated as the thing the
+  // accompaniment must support, not literal chord tones to reproduce.
+  // Ties favor the tonic triad, giving unclear windows (a single repeated
+  // note, a rest) a harmonically neutral default instead of an arbitrary one.
+  function _harmonizeMelody(tokens, windowSeconds, key) {
+    const triads = _diatonicChords(key);
+    const tonicIndex = 0;
+    const lastEnd = tokens.reduce((max, t) => Math.max(max, t.start + t.duration), 0);
+    const windowCount = Math.max(1, Math.ceil(lastEnd / windowSeconds));
+    const chords = [];
+    let lastChosen = -1;
+    for (let w = 0; w < windowCount; w++) {
+      const winStart = w * windowSeconds;
+      const winEnd = winStart + windowSeconds;
+      const weights = new Array(12).fill(0);
+      let any = false;
+      for (const tok of tokens) {
+        const overlap = Math.min(tok.start + tok.duration, winEnd) - Math.max(tok.start, winStart);
+        if (overlap <= 0) continue;
+        const pc = ((Math.round(tok.midi) % 12) + 12) % 12;
+        weights[pc] += overlap;
+        any = true;
+      }
+      if (!any) continue;
+      let bestIdx = tonicIndex, bestScore = -Infinity;
+      triads.forEach((triad, idx) => {
+        let score = triad.pitchClasses.reduce((s, pc) => s + weights[pc], 0);
+        if (idx === lastChosen) score += 0.001; // gentle stickiness, avoids chord-per-window churn on ties
+        if (score > bestScore) { bestScore = score; bestIdx = idx; }
+      });
+      const chosen = triads[bestIdx];
+      const name = (NOTE_NAMES_SHARP[chosen.root] || "C") + chosen.suffix;
+      chords.push({ t: winStart, name });
+      lastChosen = bestIdx;
+    }
+    return chords;
+  }
+
+  // Fetches the canonical vocal playback payload
+  // (docs/architecture/vocals-playback-contract.md in lyrics_karaoke) for
+  // `filename`, harmonizes the primary voice's pitched tokens into a
+  // diatonic chord sequence, and generates a keys/guitar accompaniment from
+  // it via the same generateChordArrangement path chart chords and audio
+  // detection already use. Returns null wherever there is nothing to
+  // harmonize: no lyrics_karaoke route, no prepared song, an unpitched
+  // (lyrics-only) track, or a track too short to estimate a key from.
+  async function generateAccompanimentFromLyrics(filename, options) {
+    const opts = options || {};
+    if (!filename) return null;
+    const params = new URLSearchParams({ filename });
+    if (Number.isInteger(opts.arrangementIndex)) {
+      params.set("arrangement", String(opts.arrangementIndex));
+    }
+    let payload;
+    try {
+      const res = await fetch(`/api/plugins/lyrics_karaoke/playback?${params}`);
+      if (!res.ok) return null;
+      payload = await res.json();
+    } catch (_) {
+      return null; // network error, decoding failure, host without lyrics_karaoke, etc.
+    }
+    if (!payload || payload.schema_version !== 1 || !Array.isArray(payload.voices)) return null;
+    const voice = payload.voices.find((v) => v && v.primary) || payload.voices[0];
+    const tokens = (voice && Array.isArray(voice.tokens) ? voice.tokens : [])
+      .filter((t) => Number.isFinite(t.midi) && Number.isFinite(t.start) && Number.isFinite(t.duration) && t.duration >= 0)
+      .sort((a, b) => a.start - b.start);
+    if (!tokens.length) return null; // lyrics-only track: nothing to harmonize from
+
+    const windowSeconds = Math.max(0.5, Number(opts.windowSeconds) || 2);
+    const key = _estimateKey(tokens);
+    const chords = _harmonizeMelody(tokens, windowSeconds, key);
+    if (!chords.length) return null;
+    const arrangement = generateChordArrangement(chords, opts);
+    arrangement.key = { root: NOTE_NAMES_SHARP[key.root], mode: key.mode };
+    return arrangement;
+  }
+
   // Cache keyed by song audio_url (song_info carries no `filename` field —
   // see the WebSocket protocol reference; audio_url is the identity every
   // format resolves to): always holds the detection Promise — in flight,
@@ -930,6 +1087,7 @@ if (!window[`__${PLUGIN_ID}_installed`]) {
     generateKeysArrangement,
     generateGuitarArrangement,
     generateArrangementFromAudio,
+    generateAccompanimentFromLyrics,
     identifyFromHighway,
     generateChordTemplates,
     buildLyricLines,
