@@ -23,7 +23,6 @@ Scope of this plugin (tracked as separate issues, roughly in dependency order):
    Opens its own short-lived WebSocket for the `lyrics` message (the one
    chart field with no highway getter); chords/templates come from
    `highway.getChords()`/`getChordTemplates()` as usual.
-4. **ChordPro export** (#4) for that chord/lyrics view.
 5. **Audio-based chord detection** (#5, implemented) — a fallback chord
    source for songs whose chart has no note/chord data at all (a
    loose-folder song, say). Server-side chroma-CQT + template matching
