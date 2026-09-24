@@ -46,6 +46,20 @@ window.chordr.identifyChord(chordNotes, {
   isBass,
 });
 window.chordr.identifyPianoChord(midiNotes);
+window.chordr.generateChordArrangement(chords, {
+  instrument: "keys", // default; or "guitar"
+  duration: 180,
+  chordTemplates,
+});
+await window.chordr.generateArrangementFromAudio(audioUrl, {
+  instrument: "keys",
+  duration: 180,
+});
+await window.chordr.generateAccompanimentFromLyrics(filename, {
+  instrument: "keys", // default; or "guitar"
+  arrangementIndex,   // optional — forwarded to lyrics_karaoke's /playback
+  windowSeconds: 2,   // chord-change grid; smaller = more frequent changes
+});
 window.chordr.identifyFromHighway(chordNotes, highway);
 window.chordr.generateChordTemplates(chords, existingTemplates, {
   tuning,
@@ -59,6 +73,48 @@ window.chordr.generateChordTemplates(chords, existingTemplates, {
 tolerates `{ string, fret }` objects. It returns `null` when the pitch-class
 set does not match a supported chord quality. See `CHORD_QUALITIES` in
 `chordr/screen.js`.
+
+`generateChordArrangement(chords, options)` turns named harmony events such as
+`[{t: 0, name: "C"}, {t: 2, name: "G/B"}]` into a playable arrangement. Keys
+is the default and primary output: each note is `{t, midi, sus, hand}` with a
+compact right-hand voicing, a left-hand root/slash bass, and voice leading
+between changes. `{instrument: "guitar"}` instead returns `{t, s, f, sus}`
+notes plus the selected fret shapes. Chart chords without an inline `name` can
+use `options.chordTemplates` (their `id` indexes that array), so the API works
+with authored charts and the audio detector's named events alike. The function
+does not mutate its inputs.
+
+The result is deliberately an arrangement payload rather than an automatic
+`chart-transform`: the host transform contract can replace notes but cannot
+change instrument type or create a new arrangement. An editor/importer should
+materialize this payload as a separate Keys or Guitar arrangement, leaving the
+song's original part intact.
+
+`generateArrangementFromAudio(audioUrl, options)` is the end-to-end fallback
+for a song with no authored piano part: it runs Chordr's existing audio chord
+detection and feeds those harmony events into the same keys-first generator.
+It returns `null` if audio detection fails.
+
+`generateAccompanimentFromLyrics(filename, options)` is a third generation
+path for a song whose only harmonic signal is its sung melody — a Vocals
+arrangement with synced lyrics and pitch, but no chord chart and no full-mix
+audio worth running chord detection on. It fetches
+[lyrics_karaoke's canonical `/playback` payload](https://github.com/get-flashbacks/feedback-plugin-lyrics-karaoke/blob/main/docs/architecture/vocals-playback-contract.md)
+for `filename` (`options.arrangementIndex` is forwarded as that endpoint's
+`arrangement` query param), takes the primary voice's pitched tokens, and
+*harmonizes* them: it estimates a key center from the melody's duration-weighted
+pitch-class distribution (a Krumhansl-Schmuckler-style correlation against
+major/minor key profiles), then buckets the melody into `options.windowSeconds`
+windows (default 2) and picks whichever diatonic triad of that key best
+covers each window's notes. The resulting chord sequence is fed straight into
+`generateChordArrangement`, so the same `instrument`/voicing options apply,
+and the returned arrangement carries an extra `key: {root, mode}` field
+describing what was detected. This is melody harmonization, not chord
+detection — it invents a plausible backing, it does not recover a chord
+progression that was actually played. Returns `null` when there is nothing
+to harmonize from: the lyrics_karaoke route is unavailable or 404s, the
+track is lyrics-only (no `midi` on any token), or the response's
+`schema_version` isn't the one this function understands.
 
 `generateChordTemplates(chords, existingTemplates, ctx)` takes the wire-shape
 `chords` array (`[{ id, notes: [{s,f}, ...] }, ...]`) and the current
@@ -104,6 +160,8 @@ neighbors) into chord segments.
 ```bash
 node tests/chord_analysis.test.js
 node tests/generate_chord_templates.test.js
+node tests/generate_arrangement.test.js
+node tests/generate_accompaniment_from_lyrics.test.js
 node tests/build_lyric_lines.test.js
 node tests/chord_lyrics_view.test.js
 python3 -m unittest tests/test_audio_chords.py

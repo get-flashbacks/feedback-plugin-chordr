@@ -162,6 +162,178 @@ if (!window[`__${PLUGIN_ID}_installed`]) {
     return identifyFromMidis(midiNotes, opts);
   }
 
+  // ── Chord-to-arrangement generation ─────────────────────────────────
+  // Chord detection tells us the harmony, but a playable keys/guitar part
+  // still needs concrete pitches, octaves, durations and (for guitar)
+  // string/fret choices. Keep that policy here as pure functions so an
+  // editor/importer can materialise a NEW arrangement; chart-transform is
+  // intentionally not used because it cannot change an arrangement's
+  // instrument kind.
+
+  const CHORD_INTERVALS_BY_SUFFIX = new Map(
+    CHORD_QUALITIES.map((q) => [q.suffix.toLowerCase(), q.intervals])
+  );
+
+  function parseChordName(value) {
+    const text = String(value || "").trim();
+    if (!text || /^(n\.?c\.?|no\s*chord)$/i.test(text)) return null;
+    const match = text.match(/^([A-Ga-g])([#b]?)([^/]*)?(?:\/([A-Ga-g])([#b]?))?$/);
+    if (!match) return null;
+    const pitchClass = (letter, accidental) => {
+      const natural = { C: 0, D: 2, E: 4, F: 5, G: 7, A: 9, B: 11 }[letter.toUpperCase()];
+      return (natural + (accidental === "#" ? 1 : accidental === "b" ? -1 : 0) + 12) % 12;
+    };
+    let suffix = (match[3] || "").trim();
+    const aliases = {
+      min: "m", minor: "m", maj: "", major: "", M: "",
+      "Δ": "maj7", "Δ7": "maj7", min7: "m7", "m7♭5": "m7b5",
+      "°": "dim", "°7": "dim7", "+": "aug",
+    };
+    suffix = Object.prototype.hasOwnProperty.call(aliases, suffix) ? aliases[suffix] : suffix;
+    const intervals = CHORD_INTERVALS_BY_SUFFIX.get(suffix.toLowerCase());
+    if (!intervals) return null;
+    const root = pitchClass(match[1], match[2]);
+    return {
+      name: text,
+      root,
+      bass: match[4] ? pitchClass(match[4], match[5]) : root,
+      quality: suffix,
+      intervals: intervals.slice(),
+      pitchClasses: intervals.map((iv) => (root + iv) % 12),
+    };
+  }
+
+  function _normaliseHarmonyEvents(chords, templates) {
+    const out = [];
+    for (const event of chords || []) {
+      if (!event || !Number.isFinite(Number(event.t))) continue;
+      const id = Number(event.id);
+      const template = Array.isArray(templates) && Number.isInteger(id) ? templates[id] : null;
+      const parsed = parseChordName(event.name || (template && template.name));
+      if (parsed) out.push({ t: Math.max(0, Number(event.t)), chord: parsed });
+    }
+    out.sort((a, b) => a.t - b.t);
+    // Multiple analysis frames can land at the same rounded onset. The last
+    // one is the most recent decision and avoids zero-length generated notes.
+    return out.filter((event, i) => i === out.length - 1 || event.t !== out[i + 1].t);
+  }
+
+  function _eventDuration(events, index, options) {
+    const start = events[index].t;
+    const next = events[index + 1];
+    const requestedEnd = Number(options.duration);
+    const fallback = Math.max(0.1, Number(options.defaultDuration) || 2);
+    const end = next ? next.t : (Number.isFinite(requestedEnd) && requestedEnd > start ? requestedEnd : start + fallback);
+    return Math.max(0.1, end - start);
+  }
+
+  function _midiCandidates(pc, low, high) {
+    const result = [];
+    for (let midi = low; midi <= high; midi++) if (midi % 12 === pc) result.push(midi);
+    return result;
+  }
+
+  function _bestRightHandVoicing(chord, previous, low, high) {
+    const pcs = chord.pitchClasses;
+    const candidates = pcs.map((pc) => _midiCandidates(pc, low, high));
+    let best = null;
+    const visit = (i, chosen) => {
+      if (i === candidates.length) {
+        const sorted = chosen.slice().sort((a, b) => a - b);
+        if (new Set(sorted).size !== sorted.length || sorted.at(-1) - sorted[0] > 12) return;
+        let score = sorted.reduce((sum, midi) => sum + Math.abs(midi - 64), 0) * 0.05;
+        if (previous && previous.length) {
+          score += sorted.reduce((sum, midi, idx) => sum + Math.abs(midi - previous[Math.min(idx, previous.length - 1)]), 0);
+        }
+        if (!best || score < best.score) best = { notes: sorted, score };
+        return;
+      }
+      for (const midi of candidates[i]) visit(i + 1, [...chosen, midi]);
+    };
+    visit(0, []);
+    return best ? best.notes : pcs.map((pc) => _midiCandidates(pc, low, high)[0]).filter(Number.isFinite);
+  }
+
+  function generateKeysArrangement(chords, options) {
+    const opts = options || {};
+    const events = _normaliseHarmonyEvents(chords, opts.chordTemplates);
+    const low = Math.max(36, Math.min(67, Number(opts.rightHandLow) || 55));
+    const high = Math.max(low + 12, Math.min(96, Number(opts.rightHandHigh) || 79));
+    const leftLow = Math.max(21, Math.min(low - 1, Number(opts.leftHandLow) || 36));
+    const leftHigh = Math.max(leftLow, Math.min(low - 1, Number(opts.leftHandHigh) || 52));
+    const notes = [];
+    let previous = null;
+    for (let i = 0; i < events.length; i++) {
+      const event = events[i];
+      const sus = _eventDuration(events, i, opts);
+      const right = _bestRightHandVoicing(event.chord, previous, low, high);
+      const bassChoices = _midiCandidates(event.chord.bass, leftLow, leftHigh);
+      const bass = bassChoices.length ? bassChoices.at(-1) : null;
+      if (bass !== null) notes.push({ t: event.t, midi: bass, sus, hand: "lh" });
+      for (const midi of right) notes.push({ t: event.t, midi, sus, hand: "rh" });
+      previous = right;
+    }
+    return { instrument: "keys", notes, sourceChords: events.map((e) => ({ t: e.t, name: e.chord.name })) };
+  }
+
+  function _bestGuitarShape(chord, options) {
+    const stringCount = Number(options.stringCount) || 6;
+    const tuning = options.tuning && options.tuning.length ? options.tuning : new Array(stringCount).fill(0);
+    const base = baseOpenStringMidis(stringCount, false);
+    const maxFret = Math.max(3, Math.min(15, Number(options.maxFret) || 8));
+    const wanted = new Set(chord.pitchClasses);
+    const choices = [];
+    for (let s = 0; s < stringCount; s++) {
+      const open = (base[s] ?? base.at(-1)) + Number(tuning[s] || 0);
+      const frets = [-1];
+      for (let f = 0; f <= maxFret; f++) if (wanted.has((open + f) % 12)) frets.push(f);
+      choices.push(frets);
+    }
+    let best = null;
+    const visit = (s, frets) => {
+      if (s === choices.length) {
+        const sounding = frets.map((f, idx) => f < 0 ? null : (base[idx] ?? base.at(-1)) + Number(tuning[idx] || 0) + f).filter(Number.isFinite);
+        if (sounding.length < Math.min(3, chord.pitchClasses.length)) return;
+        const covered = new Set(sounding.map((m) => m % 12));
+        if (!chord.pitchClasses.every((pc) => covered.has(pc))) return;
+        const pressed = frets.filter((f) => f > 0);
+        const span = pressed.length ? Math.max(...pressed) - Math.min(...pressed) : 0;
+        if (span > 4) return;
+        const bassPenalty = sounding[0] % 12 === chord.bass ? 0 : 8;
+        const score = bassPenalty + span * 3 + frets.filter((f) => f < 0).length * 1.5 + frets.reduce((n, f) => n + Math.max(0, f), 0) * 0.08;
+        if (!best || score < best.score) best = { frets: frets.slice(), score };
+        return;
+      }
+      for (const fret of choices[s]) visit(s + 1, [...frets, fret]);
+    };
+    visit(0, []);
+    return best && best.frets;
+  }
+
+  function generateGuitarArrangement(chords, options) {
+    const opts = options || {};
+    const events = _normaliseHarmonyEvents(chords, opts.chordTemplates);
+    const notes = [];
+    const shapes = [];
+    for (let i = 0; i < events.length; i++) {
+      const event = events[i];
+      const frets = _bestGuitarShape(event.chord, opts);
+      if (!frets) continue;
+      const sus = _eventDuration(events, i, opts);
+      frets.forEach((f, s) => { if (f >= 0) notes.push({ t: event.t, s, f, sus }); });
+      shapes.push({ t: event.t, name: event.chord.name, frets });
+    }
+    return { instrument: "guitar", notes, shapes, sourceChords: events.map((e) => ({ t: e.t, name: e.chord.name })) };
+  }
+
+  function generateChordArrangement(chords, options) {
+    const opts = options || {};
+    const instrument = String(opts.instrument || "keys").toLowerCase();
+    return /^(guitar|acoustic|electric)$/.test(instrument)
+      ? generateGuitarArrangement(chords, opts)
+      : generateKeysArrangement(chords, opts);
+  }
+
   function identifyFromHighway(chordNotes, highway) {
     const hw = highway || window.highway;
     if (!hw || typeof hw.getSongInfo !== "function") {
@@ -555,6 +727,172 @@ if (!window[`__${PLUGIN_ID}_installed`]) {
     }
   };
 
+  // One-call path for the core use case: a song has audio but no authored
+  // piano/keys part. Detection failures remain soft (matching
+  // detectChordsFromAudio); a successful empty detection yields an empty but
+  // well-formed arrangement.
+  const generateArrangementFromAudio = async (audioUrl, options) => {
+    const chords = await detectChordsFromAudio(audioUrl);
+    return chords ? generateChordArrangement(chords, options) : null;
+  };
+
+  // ── Melody-to-accompaniment (via lyrics_karaoke) ────────────────────────
+  // A third generation path alongside chart chords and audio chord
+  // detection: for a song whose only harmonic information is its sung
+  // melody (a Vocals arrangement with synced lyrics + pitch, no chord
+  // chart and no full-mix audio worth running chord detection on), derive
+  // a backing accompaniment straight from the melody notes lyrics_karaoke
+  // already extracted. This is a monophonic-melody harmonization problem,
+  // not a chord-detection one: we pick diatonic chords that best support
+  // the sung notes, not chords already sounding in a recording.
+
+  // Krumhansl-Kessler key profiles (rotated per candidate tonic), used only
+  // to pick a plausible key center from the melody's own pitch-class
+  // durations — this is a coarse heuristic, not music-theoretic ground
+  // truth, and is expected to misfire on melodies that modulate or that
+  // are modal/pentatonic enough to fit multiple keys equally well.
+  const KK_MAJOR_PROFILE = [6.35, 2.23, 3.48, 2.33, 4.38, 4.09, 2.52, 5.19, 2.39, 3.66, 2.29, 2.88];
+  const KK_MINOR_PROFILE = [6.33, 2.68, 3.52, 5.38, 2.60, 3.53, 2.54, 4.75, 3.98, 2.69, 3.34, 3.17];
+
+  // Diatonic triads by scale degree (root offset in semitones from tonic,
+  // quality suffix matching CHORD_QUALITIES). Degree seven is the
+  // half-diminished/diminished triad in both modes' natural form.
+  const MAJOR_DEGREE_TRIADS = [
+    { offset: 0, suffix: "" }, { offset: 2, suffix: "m" }, { offset: 4, suffix: "m" },
+    { offset: 5, suffix: "" }, { offset: 7, suffix: "" }, { offset: 9, suffix: "m" },
+    { offset: 11, suffix: "dim" },
+  ];
+  const MINOR_DEGREE_TRIADS = [
+    { offset: 0, suffix: "m" }, { offset: 2, suffix: "dim" }, { offset: 3, suffix: "" },
+    { offset: 5, suffix: "m" }, { offset: 7, suffix: "m" }, { offset: 8, suffix: "" },
+    { offset: 10, suffix: "" },
+  ];
+
+  function _pitchClassDurations(tokens) {
+    const weights = new Array(12).fill(0);
+    for (const tok of tokens) {
+      const pc = ((Math.round(tok.midi) % 12) + 12) % 12;
+      weights[pc] += Math.max(0.05, Number(tok.duration) || 0.05);
+    }
+    return weights;
+  }
+
+  function _correlate(a, b) {
+    const meanA = a.reduce((s, v) => s + v, 0) / a.length;
+    const meanB = b.reduce((s, v) => s + v, 0) / b.length;
+    let num = 0, denomA = 0, denomB = 0;
+    for (let i = 0; i < a.length; i++) {
+      const da = a[i] - meanA, db = b[i] - meanB;
+      num += da * db; denomA += da * da; denomB += db * db;
+    }
+    const denom = Math.sqrt(denomA * denomB);
+    return denom > 0 ? num / denom : 0;
+  }
+
+  function _estimateKey(tokens) {
+    const weights = _pitchClassDurations(tokens);
+    let best = { root: 0, mode: "major", score: -Infinity };
+    for (let root = 0; root < 12; root++) {
+      const rotated = weights.slice(root).concat(weights.slice(0, root));
+      const majorScore = _correlate(rotated, KK_MAJOR_PROFILE);
+      const minorScore = _correlate(rotated, KK_MINOR_PROFILE);
+      if (majorScore > best.score) best = { root, mode: "major", score: majorScore };
+      if (minorScore > best.score) best = { root, mode: "minor", score: minorScore };
+    }
+    return { root: best.root, mode: best.mode };
+  }
+
+  function _diatonicChords(key) {
+    const degrees = key.mode === "minor" ? MINOR_DEGREE_TRIADS : MAJOR_DEGREE_TRIADS;
+    return degrees.map((d) => {
+      const root = (key.root + d.offset) % 12;
+      const intervals = CHORD_INTERVALS_BY_SUFFIX.get(d.suffix.toLowerCase());
+      return {
+        root, suffix: d.suffix,
+        pitchClasses: intervals.map((iv) => (root + iv) % 12),
+      };
+    });
+  }
+
+  // Groups melody tokens into fixed windows and, per window, scores every
+  // diatonic triad by how much of the window's (duration-weighted) melody
+  // content it covers — the sung notes are treated as the thing the
+  // accompaniment must support, not literal chord tones to reproduce.
+  // Ties favor the tonic triad, giving unclear windows (a single repeated
+  // note, a rest) a harmonically neutral default instead of an arbitrary one.
+  function _harmonizeMelody(tokens, windowSeconds, key) {
+    const triads = _diatonicChords(key);
+    const tonicIndex = 0;
+    const lastEnd = tokens.reduce((max, t) => Math.max(max, t.start + t.duration), 0);
+    const windowCount = Math.max(1, Math.ceil(lastEnd / windowSeconds));
+    const chords = [];
+    let lastChosen = -1;
+    for (let w = 0; w < windowCount; w++) {
+      const winStart = w * windowSeconds;
+      const winEnd = winStart + windowSeconds;
+      const weights = new Array(12).fill(0);
+      let any = false;
+      for (const tok of tokens) {
+        const overlap = Math.min(tok.start + tok.duration, winEnd) - Math.max(tok.start, winStart);
+        if (overlap <= 0) continue;
+        const pc = ((Math.round(tok.midi) % 12) + 12) % 12;
+        weights[pc] += overlap;
+        any = true;
+      }
+      if (!any) continue;
+      let bestIdx = tonicIndex, bestScore = -Infinity;
+      triads.forEach((triad, idx) => {
+        let score = triad.pitchClasses.reduce((s, pc) => s + weights[pc], 0);
+        if (idx === lastChosen) score += 0.001; // gentle stickiness, avoids chord-per-window churn on ties
+        if (score > bestScore) { bestScore = score; bestIdx = idx; }
+      });
+      const chosen = triads[bestIdx];
+      const name = (NOTE_NAMES_SHARP[chosen.root] || "C") + chosen.suffix;
+      chords.push({ t: winStart, name });
+      lastChosen = bestIdx;
+    }
+    return chords;
+  }
+
+  // Fetches the canonical vocal playback payload
+  // (docs/architecture/vocals-playback-contract.md in lyrics_karaoke) for
+  // `filename`, harmonizes the primary voice's pitched tokens into a
+  // diatonic chord sequence, and generates a keys/guitar accompaniment from
+  // it via the same generateChordArrangement path chart chords and audio
+  // detection already use. Returns null wherever there is nothing to
+  // harmonize: no lyrics_karaoke route, no prepared song, an unpitched
+  // (lyrics-only) track, or a track too short to estimate a key from.
+  async function generateAccompanimentFromLyrics(filename, options) {
+    const opts = options || {};
+    if (!filename) return null;
+    const params = new URLSearchParams({ filename });
+    if (Number.isInteger(opts.arrangementIndex)) {
+      params.set("arrangement", String(opts.arrangementIndex));
+    }
+    let payload;
+    try {
+      const res = await fetch(`/api/plugins/lyrics_karaoke/playback?${params}`);
+      if (!res.ok) return null;
+      payload = await res.json();
+    } catch (_) {
+      return null; // network error, decoding failure, host without lyrics_karaoke, etc.
+    }
+    if (!payload || payload.schema_version !== 1 || !Array.isArray(payload.voices)) return null;
+    const voice = payload.voices.find((v) => v && v.primary) || payload.voices[0];
+    const tokens = (voice && Array.isArray(voice.tokens) ? voice.tokens : [])
+      .filter((t) => Number.isFinite(t.midi) && Number.isFinite(t.start) && Number.isFinite(t.duration) && t.duration >= 0)
+      .sort((a, b) => a.start - b.start);
+    if (!tokens.length) return null; // lyrics-only track: nothing to harmonize from
+
+    const windowSeconds = Math.max(0.5, Number(opts.windowSeconds) || 2);
+    const key = _estimateKey(tokens);
+    const chords = _harmonizeMelody(tokens, windowSeconds, key);
+    if (!chords.length) return null;
+    const arrangement = generateChordArrangement(chords, opts);
+    arrangement.key = { root: NOTE_NAMES_SHARP[key.root], mode: key.mode };
+    return arrangement;
+  }
+
   // Cache keyed by song audio_url (song_info carries no `filename` field —
   // see the WebSocket protocol reference; audio_url is the identity every
   // format resolves to): always holds the detection Promise — in flight,
@@ -744,6 +1082,12 @@ if (!window[`__${PLUGIN_ID}_installed`]) {
   window.chordr = {
     identifyChord,
     identifyPianoChord,
+    parseChordName,
+    generateChordArrangement,
+    generateKeysArrangement,
+    generateGuitarArrangement,
+    generateArrangementFromAudio,
+    generateAccompanimentFromLyrics,
     identifyFromHighway,
     generateChordTemplates,
     buildLyricLines,
