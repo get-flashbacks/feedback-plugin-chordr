@@ -234,14 +234,14 @@ if (!window[`__${PLUGIN_ID}_installed`]) {
   // chart-transform provider (_transformInput) need the same isBass/isPiano
   // read off a songInfo-shaped object, so it lives here once rather than
   // being reimplemented at each call site.
-  function _getArrangementContext(songInfo) {
+  const _getArrangementContext = (songInfo) => {
     const info = songInfo || {};
     const arrangementText = `${info.arrangement || ""} ${info.arrangement_smart_name || ""}`;
     return {
       isBass: /bass/i.test(arrangementText),
       isPiano: KEYS_PATTERNS.test(arrangementText),
     };
-  }
+  };
 
   function identifyFromHighway(chordNotes, highway) {
     const hw = highway || window.highway;
