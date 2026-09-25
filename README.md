@@ -69,6 +69,10 @@ available to server-side plugins through the versioned
 `app.state.chordr_analyze_chart_chords_v1(chords, context=...)` callable when
 Chordr is active; it runs Chordr's JavaScript implementation in one Node
 batch and returns `grouped` plus `identities` without modifying chart data.
+That call is synchronous and blocking (a Node subprocess, bounded to ~20s),
+so server consumers must invoke it via
+`fastapi.concurrency.run_in_threadpool` or from a sync `def` route — not
+inline in an `async def` handler — and the host needs Node.js >= 16.6.
 `resolvedIdentities` inherits the parent chord's identity for otherwise
 unnamed partial strums; a shape that is not a subset remains unresolved.
 `resolvedNames` also uses an authored template name where one exists, so
@@ -120,7 +124,9 @@ node tests/chord_analysis.test.js
 node tests/generate_chord_templates.test.js
 node tests/build_lyric_lines.test.js
 node tests/chord_lyrics_view.test.js
+node tests/group_chord_events.test.js
 python3 -m unittest tests/test_audio_chords.py
+python3 -m unittest tests/test_chart_bridge.py
 ```
 
 ## License

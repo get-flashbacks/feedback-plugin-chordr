@@ -10,6 +10,9 @@
   "scriptType": "classic",
   "styles": "assets/plugin.css",
   "routes": "routes.py",
+  "serverRequires": {
+    "node": ">= 16.6"
+  },
   "minHost": "1.0.0",
   "standards": ["capability-pipelines.v1"],
   "capabilities": {

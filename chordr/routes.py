@@ -10,8 +10,8 @@ bytes here rather than this plugin trying to re-resolve format-specific
 audio paths itself.
 """
 
-import logging
 import json
+import logging
 import shutil
 import subprocess
 import tempfile
@@ -40,6 +40,28 @@ _CONTENT_TYPE_SUFFIX = {
     "audio/flac": ".flac",
 }
 
+_NODE_MIN_VERSION = (16, 6)
+_NODE_REQUIRED_MESSAGE = "Node.js >= 16.6 is required for chordr chart analysis"
+
+
+def _node_meets_min_version(node_path: str) -> bool:
+    """True when the resolved node binary is at least Node 16.6.
+
+    The bridge's language features (Array.prototype.at, optional
+    chaining, nullish coalescing) need that floor, so fail up front with
+    a clear message rather than surfacing a SyntaxError at analysis time.
+    A node that exists but can't report a version is treated as old.
+    """
+    out = subprocess.run(
+        [node_path, "--version"], text=True, capture_output=True, timeout=20,
+        check=False,
+    ).stdout.strip()
+    try:
+        major, minor = (int(part) for part in out.lstrip("v").split(".")[:2])
+    except (ValueError, AttributeError):
+        return False
+    return (major, minor) >= _NODE_MIN_VERSION
+
 
 def setup(app: FastAPI, context: dict) -> None:
     log = context.get("log") or logging.getLogger(f"feedBack.plugin.{PLUGIN_ID}")
@@ -47,11 +69,16 @@ def setup(app: FastAPI, context: dict) -> None:
 
     def analyze_chart_chords(chords: list, *, context: dict | None = None,
                              templates: list | None = None) -> dict:
-        """Versioned in-process service for server-side sibling consumers.
+        """Versioned service for server-side sibling consumers.
 
         Chordr's browser implementation remains the single source of truth:
-        the small Node bridge invokes that implementation in one batch.
-        This service only analyzes chart data and never changes a pack.
+        the small Node bridge invokes that implementation in one batch. This
+        call runs a blocking Node subprocess (bounded to ~20s by timeout) and
+        needs Node.js >= 16.6 on the host, so consumers must invoke it via
+        `fastapi.concurrency.run_in_threadpool` (or from a sync `def` route)
+        rather than inline in an `async def` handler — same event-loop rule
+        detect_chords documents below. This service only analyzes chart data
+        and never changes a pack.
         """
         if not isinstance(chords, list) or len(chords) > 100_000:
             raise ValueError("invalid chord list")
@@ -60,8 +87,8 @@ def setup(app: FastAPI, context: dict) -> None:
         if len(payload) > 8_000_000:
             raise ValueError("chord analysis input too large")
         node = shutil.which("node")
-        if node is None:
-            raise RuntimeError("Node.js is required for chordr chart analysis")
+        if node is None or not _node_meets_min_version(node):
+            raise RuntimeError(_NODE_REQUIRED_MESSAGE)
         node_executable = Path(node).resolve(strict=True)
         bridge = Path(__file__).with_name("analyze_cli.js").resolve(strict=True)
         # Both argv paths come from the trusted installation, not chart input.
