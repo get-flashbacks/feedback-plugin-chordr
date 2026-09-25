@@ -2,6 +2,7 @@
 """Smoke tests for the fixed-script Node chart-analysis bridge."""
 
 import sys
+import unittest
 from pathlib import Path
 from unittest.mock import patch
 
@@ -19,12 +20,13 @@ def _service():
     return app.state.chordr_analyze_chart_chords_v1
 
 
-def test_chart_analysis_uses_fixed_bridge():
-    result = _service()([], templates=[])
-    assert result == {
-        "grouped": [], "identities": [],
-        "resolvedIdentities": [], "resolvedNames": [],
-    }
+class ChartBridgeTests(unittest.TestCase):
+    def test_chart_analysis_uses_fixed_bridge(self):
+        result = _service()([], templates=[])
+        self.assertEqual(result, {
+            "grouped": [], "identities": [],
+            "resolvedIdentities": [], "resolvedNames": [],
+        })
 
 
 def test_chart_analysis_reports_missing_node():

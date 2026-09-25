@@ -64,6 +64,9 @@ def setup(app: FastAPI, context: dict) -> None:
             raise RuntimeError("Node.js is required for chordr chart analysis")
         node_executable = Path(node).resolve(strict=True)
         bridge = Path(__file__).with_name("analyze_cli.js").resolve(strict=True)
+        # Both argv paths come from the trusted installation, not chart input.
+        # Keep shell=False, bound stdin size, and enforce a timeout: the only
+        # untrusted material reaches Node as JSON on stdin, never as a command.
         result = subprocess.run(
             [str(node_executable), str(bridge)],
             input=payload, text=True, capture_output=True, timeout=20, check=False,
