@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Chord identification on piano/keys arrangements no longer misreads their
+  MIDI-bucket-encoded `{s, f}` wire notes as guitar string+fret positions.
+  Piano/keys arrangements (detected the same way `feedBack-plugin-piano`
+  does) now decode `midi = s*24 + f` directly, and auto-generated chord
+  templates for them no longer write a nonsense guitar fret diagram. Fixes
+  a bug where an unnamed C major piano voicing was auto-named "D". (#19)
+
 ### Added
 
 - Expose conservative chord-event grouping in `window.chordr.groupChordEvents`

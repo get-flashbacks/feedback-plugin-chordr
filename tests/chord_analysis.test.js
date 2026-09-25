@@ -242,3 +242,87 @@ test('identifyFromHighway detects bass via arrangement_smart_name even when the 
     assert.equal(result.rootName, 'E');
     assert.equal(result.quality, '5');
 });
+
+// Regression coverage for chordr#19: piano/keys arrangements reuse the
+// guitar wire format's {s, f} fields to carry a MIDI-bucket encoding
+// (midi = s*24 + f, per feedBack-plugin-piano's CLAUDE.md), not a real
+// string index + fret number. Feeding that through the guitar tuning-table
+// math previously misnamed a plain C major voicing as D.
+
+test('midiFromPianoNote decodes the s*24+f MIDI bucket encoding', () => {
+    const chordr = freshPlugin();
+    // MIDI 60 (C4) encodes as s=2, f=12.
+    assert.equal(chordr.midiFromPianoNote(2, 12), 60);
+    assert.equal(chordr.midiFromPianoNote(NaN, 12), null);
+    assert.equal(chordr.midiFromPianoNote(2, undefined), null);
+});
+
+test('identifyChord with isPiano decodes {s, f} as a MIDI bucket instead of guitar string+fret', () => {
+    const chordr = freshPlugin();
+    // C major voicing (C4, E4, G4) encoded as piano wire notes.
+    const chord = [
+        { s: Math.floor(60 / 24), f: 60 % 24 },              // C4 -> s=2, f=12
+        { s: Math.floor(64 / 24), f: 64 % 24 },             // E4 -> s=2, f=16
+        { s: Math.floor(67 / 24), f: 67 % 24 },             // G4 -> s=2, f=19
+    ];
+    const result = chordr.identifyChord(chord, { isPiano: true });
+    assert.ok(result);
+    assert.equal(result.rootName, 'C');
+    assert.equal(result.quality, '');
+    assert.equal(result.name, 'C');
+});
+
+test('identifyChord WITHOUT isPiano misreads the same piano-encoded chord as guitar string+fret (documents the pre-fix bug shape)', () => {
+    const chordr = freshPlugin();
+    const chord = [{ s: 2, f: 12 }]; // C4's wire encoding
+    // A lone note never resolves to a chord, but pitchFromBase's guitar
+    // math is what identifyFromHighway/identifyChord used to run this
+    // through unconditionally; assert the underlying pitch math directly.
+    const base = chordr.baseOpenStringMidis(6, false);
+    const guitarMidi = chordr.pitchFromBase(base, 0, [0, 0, 0, 0, 0, 0], 2, 12);
+    assert.equal(guitarMidi, 62); // D, not C4's real 60 -> confirms the bug this fix addresses
+});
+
+test('identifyFromHighway detects a piano/keys arrangement via KEYS_PATTERNS and decodes MIDI-bucket notes correctly', () => {
+    const chordr = freshPlugin();
+    const fakeHighway = {
+        getSongInfo: () => ({ arrangement: 'Keys' }),
+        getStringCount: () => undefined,
+    };
+    const chord = [
+        { s: Math.floor(60 / 24), f: 60 % 24 }, // C4
+        { s: Math.floor(64 / 24), f: 64 % 24 }, // E4
+        { s: Math.floor(67 / 24), f: 67 % 24 }, // G4
+    ];
+    const result = chordr.identifyFromHighway(chord, fakeHighway);
+    assert.ok(result);
+    assert.equal(result.rootName, 'C');
+    assert.equal(result.quality, '');
+});
+
+test('KEYS_PATTERNS matches piano/keys/keyboard/synth arrangement names', () => {
+    const chordr = freshPlugin();
+    assert.ok(chordr.KEYS_PATTERNS.test('Piano'));
+    assert.ok(chordr.KEYS_PATTERNS.test('Keys'));
+    assert.ok(chordr.KEYS_PATTERNS.test('Keyboard'));
+    assert.ok(chordr.KEYS_PATTERNS.test('Synth'));
+    assert.ok(!chordr.KEYS_PATTERNS.test('Lead Guitar'));
+});
+
+test('generateChordTemplates with isPiano generates a name but no guitar-shaped fret diagram', () => {
+    const chordr = freshPlugin();
+    const chords = [
+        {
+            id: 0,
+            notes: [
+                { s: Math.floor(60 / 24), f: 60 % 24 },
+                { s: Math.floor(64 / 24), f: 64 % 24 },
+                { s: Math.floor(67 / 24), f: 67 % 24 },
+            ],
+        },
+    ];
+    const templates = chordr.generateChordTemplates(chords, [], { isPiano: true, stringCount: 6 });
+    assert.ok(templates);
+    assert.equal(templates[0].name, 'C');
+    assert.ok(templates[0].frets.every((f) => f === -1));
+});
