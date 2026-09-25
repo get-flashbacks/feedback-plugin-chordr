@@ -282,10 +282,15 @@ if (!window[`__${PLUGIN_ID}_installed`]) {
   // `fingers` has no source in raw chart data (same as GP imports, see
   // core CLAUDE.md: "GP imports currently emit all -1 since pre-import
   // sources don't carry finger data") so it's left as the same sentinel.
-  function _shapeFromChordNotes(chordNotes, stringCount) {
+  // `noDiagram` skips the per-note fret-filling pass and returns just the
+  // all -1 sentinel shape — used for piano/keys chords, where {s, f} is a
+  // MIDI bucket rather than a string+fret position and a per-string shape
+  // has no meaning.
+  function _shapeFromChordNotes(chordNotes, stringCount, noDiagram) {
     const n = Math.max(1, Number(stringCount) || 6);
     const frets = new Array(n).fill(-1);
     const fingers = new Array(n).fill(-1);
+    if (noDiagram) return { frets, fingers };
     for (const note of chordNotes || []) {
       if (!note || typeof note !== "object") continue;
       const s = Number(note.s ?? note.string);
@@ -318,13 +323,7 @@ if (!window[`__${PLUGIN_ID}_installed`]) {
       if (!Array.isArray(chord.notes) || chord.notes.length === 0) continue;
       if (!_templateNeedsGeneration(templates[id])) continue;
 
-      // A per-string fretboard shape has no meaning for a piano/keys chord
-      // ({s, f} there is a MIDI bucket, not a string+fret position) — only
-      // generate the name, and leave frets/fingers as the "no diagram"
-      // sentinel rather than writing a nonsense guitar-shaped diagram.
-      const shape = options.isPiano
-        ? { frets: new Array(Math.max(1, Number(stringCount) || 6)).fill(-1), fingers: new Array(Math.max(1, Number(stringCount) || 6)).fill(-1) }
-        : _shapeFromChordNotes(chord.notes, stringCount);
+      const shape = _shapeFromChordNotes(chord.notes, stringCount, options.isPiano);
       const identified = identifyChord(chord.notes, options);
       const existingName = templates[id] && templates[id].name;
       templates[id] = {
