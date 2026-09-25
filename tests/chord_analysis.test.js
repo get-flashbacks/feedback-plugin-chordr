@@ -272,15 +272,16 @@ test('identifyChord with isPiano decodes {s, f} as a MIDI bucket instead of guit
     assert.equal(result.name, 'C');
 });
 
-test('identifyChord WITHOUT isPiano misreads the same piano-encoded chord as guitar string+fret (documents the pre-fix bug shape)', () => {
+test('pitchFromBase (the guitar decode path) misreads C4\'s piano wire encoding {s:2, f:12} as D, documenting the pre-fix bug shape', () => {
     const chordr = freshPlugin();
-    const chord = [{ s: 2, f: 12 }]; // C4's wire encoding
-    // A lone note never resolves to a chord, but pitchFromBase's guitar
-    // math is what identifyFromHighway/identifyChord used to run this
-    // through unconditionally; assert the underlying pitch math directly.
+    // A lone note never resolves to a full chord via identifyChord, so this
+    // asserts the underlying pitch math directly: pitchFromBase's guitar
+    // string+fret formula is what identifyFromHighway/identifyChord used to
+    // run every piano note's {s, f} MIDI-bucket encoding through
+    // unconditionally, before this fix added the isPiano branch.
     const base = chordr.baseOpenStringMidis(6, false);
     const guitarMidi = chordr.pitchFromBase(base, 0, [0, 0, 0, 0, 0, 0], 2, 12);
-    assert.equal(guitarMidi, 62); // D, not C4's real 60 -> confirms the bug this fix addresses
+    assert.equal(guitarMidi, 62); // D, not C4's real MIDI 60 -> confirms the bug this fix addresses
 });
 
 test('identifyFromHighway detects a piano/keys arrangement via KEYS_PATTERNS and decodes MIDI-bucket notes correctly', () => {
