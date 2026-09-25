@@ -286,7 +286,7 @@ if (!window[`__${PLUGIN_ID}_installed`]) {
   // all -1 sentinel shape — used for piano/keys chords, where {s, f} is a
   // MIDI bucket rather than a string+fret position and a per-string shape
   // has no meaning.
-  function _shapeFromChordNotes(chordNotes, stringCount, noDiagram) {
+  const _shapeFromChordNotes = (chordNotes, stringCount, noDiagram) => {
     const n = Math.max(1, Number(stringCount) || 6);
     const frets = new Array(n).fill(-1);
     const fingers = new Array(n).fill(-1);
@@ -299,7 +299,7 @@ if (!window[`__${PLUGIN_ID}_installed`]) {
       frets[s] = f;
     }
     return { frets, fingers };
-  }
+  };
 
   // `chords` is the raw wire-format array (`{ t, id, notes: [{s,f,...}] }`,
   // see core's WebSocket protocol reference — `id` indexes `chordTemplates`).
