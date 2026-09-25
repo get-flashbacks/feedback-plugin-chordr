@@ -257,6 +257,22 @@ test('midiFromPianoNote decodes the s*24+f MIDI bucket encoding', () => {
     assert.equal(chordr.midiFromPianoNote(2, undefined), null);
 });
 
+test('midiFromPianoNote rejects non-integer bucket components', () => {
+    const chordr = freshPlugin();
+    // s/f are discrete bucket components — a fractional value would
+    // silently decode to a plausible-looking but wrong pitch.
+    assert.equal(chordr.midiFromPianoNote(2.5, 12), null);
+    assert.equal(chordr.midiFromPianoNote(2, 12.1), null);
+});
+
+test('getArrangementContext resolves isBass/isPiano from a songInfo-shaped object', () => {
+    const chordr = freshPlugin();
+    assert.deepEqual(chordr.getArrangementContext({ arrangement: 'Piano' }), { isBass: false, isPiano: true });
+    assert.deepEqual(chordr.getArrangementContext({ arrangement: 'Bass' }), { isBass: true, isPiano: false });
+    assert.deepEqual(chordr.getArrangementContext({ arrangement: 'Lead Guitar' }), { isBass: false, isPiano: false });
+    assert.deepEqual(chordr.getArrangementContext(undefined), { isBass: false, isPiano: false });
+});
+
 test('identifyChord with isPiano decodes {s, f} as a MIDI bucket instead of guitar string+fret', () => {
     const chordr = freshPlugin();
     // C major voicing (C4, E4, G4) encoded as piano wire notes.

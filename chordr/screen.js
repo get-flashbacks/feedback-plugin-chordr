@@ -44,11 +44,14 @@ if (!window[`__${PLUGIN_ID}_installed`]) {
   // carry a MIDI-bucket encoding (`midi = s*24 + f`, see
   // feedBack-plugin-piano's CLAUDE.md) — NOT a real string index + fret
   // number. Decoding it through the guitar tuning-table math in
-  // pitchFromBase() silently produces a wrong pitch (chordr#19).
-  function midiFromPianoNote(s, f) {
-    if (!Number.isFinite(s) || !Number.isFinite(f)) return null;
+  // pitchFromBase() silently produces a wrong pitch (chordr#19). `s` and
+  // `f` are discrete bucket components, so a non-integer value (e.g. a
+  // stray guitar-shaped fret) is rejected rather than producing a pitch
+  // that looks valid but isn't.
+  const midiFromPianoNote = (s, f) => {
+    if (!Number.isInteger(s) || !Number.isInteger(f)) return null;
     return s * 24 + f;
-  }
+  };
 
   // Standard open-string base MIDI list for an arrangement, index 0 = lowest.
   // Mirrors app.js `_tuningOffsetsToFreqs`: a 4/5-string bass uses its own
@@ -227,6 +230,19 @@ if (!window[`__${PLUGIN_ID}_installed`]) {
     return identifyFromMidis(midiNotes, opts);
   }
 
+  // Shared instrument-detection: both identifyFromHighway and the
+  // chart-transform provider (_transformInput) need the same isBass/isPiano
+  // read off a songInfo-shaped object, so it lives here once rather than
+  // being reimplemented at each call site.
+  function _getArrangementContext(songInfo) {
+    const info = songInfo || {};
+    const arrangementText = `${info.arrangement || ""} ${info.arrangement_smart_name || ""}`;
+    return {
+      isBass: /bass/i.test(arrangementText),
+      isPiano: KEYS_PATTERNS.test(arrangementText),
+    };
+  }
+
   function identifyFromHighway(chordNotes, highway) {
     const hw = highway || window.highway;
     if (!hw || typeof hw.getSongInfo !== "function") {
@@ -234,9 +250,7 @@ if (!window[`__${PLUGIN_ID}_installed`]) {
     }
     const songInfo = hw.getSongInfo() || {};
     const stringCount = typeof hw.getStringCount === "function" ? hw.getStringCount() : undefined;
-    const arrangementText = `${songInfo.arrangement || ""} ${songInfo.arrangement_smart_name || ""}`;
-    const isBass = /bass/i.test(arrangementText);
-    const isPiano = KEYS_PATTERNS.test(arrangementText);
+    const { isBass, isPiano } = _getArrangementContext(songInfo);
     return identifyChord(chordNotes, {
       tuning: songInfo.tuning,
       capo: songInfo.capo,
@@ -334,9 +348,7 @@ if (!window[`__${PLUGIN_ID}_installed`]) {
   function _transformInput(input) {
     const chords = Array.isArray(input.allChords) ? input.allChords : input.chords;
     const songInfo = input.songInfo || {};
-    const arrangementText = `${songInfo.arrangement || ""} ${songInfo.arrangement_smart_name || ""}`;
-    const isBass = /bass/i.test(arrangementText);
-    const isPiano = KEYS_PATTERNS.test(arrangementText);
+    const { isBass, isPiano } = _getArrangementContext(songInfo);
     const merged = generateChordTemplates(chords, input.chordTemplates, {
       tuning: songInfo.tuning,
       capo: songInfo.capo,
@@ -832,6 +844,7 @@ if (!window[`__${PLUGIN_ID}_installed`]) {
     noteName,
     CHORD_QUALITIES,
     KEYS_PATTERNS,
+    getArrangementContext: _getArrangementContext,
     detectChordsFromAudio,
     // Not part of the public API (see README) — exposed only so
     // tests/chord_lyrics_view.test.js can drive the chord/lyrics view's
