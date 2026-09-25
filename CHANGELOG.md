@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Expose conservative chord-event grouping in `window.chordr.groupChordEvents`
+  and a server-side analysis callable. Partial fret/string shapes remain
+  attached to the preceding full chord, including across successive partial
+  strums; unrelated or unknown shapes start a new group.
+
 - Auto-generate chord diagrams for chords whose chart data carries no
   usable template (missing, or GP-import placeholder all `-1` frets) —
   `window.chordr.generateChordTemplates()` derives a fret/string shape
