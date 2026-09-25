@@ -35,6 +35,24 @@ if (!window[`__${PLUGIN_ID}_installed`]) {
   const NOTE_NAMES_SHARP = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
   const NOTE_NAMES_FLAT  = ["C", "Db", "D", "Eb", "E", "F", "Gb", "G", "Ab", "A", "Bb", "B"];
 
+  // Same pattern feedBack-plugin-piano's matchesArrangement uses to claim an
+  // arrangement (KEYS_PATTERNS in that plugin's screen.js) — kept identical
+  // so "is this a piano/keys arrangement" agrees across both plugins.
+  const KEYS_PATTERNS = /\b(?:keys|piano|keyboard|synth)\b/i;
+
+  // Piano/keys arrangements reuse the guitar wire format's {s, f} fields to
+  // carry a MIDI-bucket encoding (`midi = s*24 + f`, see
+  // feedBack-plugin-piano's CLAUDE.md) — NOT a real string index + fret
+  // number. Decoding it through the guitar tuning-table math in
+  // pitchFromBase() silently produces a wrong pitch (chordr#19). `s` and
+  // `f` are discrete bucket components, so a non-integer value (e.g. a
+  // stray guitar-shaped fret) is rejected rather than producing a pitch
+  // that looks valid but isn't.
+  const midiFromPianoNote = (s, f) => {
+    if (!Number.isInteger(s) || !Number.isInteger(f)) return null;
+    return s * 24 + f;
+  };
+
   // Standard open-string base MIDI list for an arrangement, index 0 = lowest.
   // Mirrors app.js `_tuningOffsetsToFreqs`: a 4/5-string bass uses its own
   // low base; a 4/5-string non-bass (a guitar voicing) borrows the low
@@ -140,6 +158,22 @@ if (!window[`__${PLUGIN_ID}_installed`]) {
   function identifyChord(chordNotes, ctx) {
     const options = ctx || {};
     if (!Array.isArray(chordNotes) || chordNotes.length === 0) return null;
+
+    // Piano/keys: {s, f} is a MIDI bucket, not string+fret — decode it
+    // directly instead of running it through the guitar tuning-table math.
+    if (options.isPiano) {
+      const midis = [];
+      for (const n of chordNotes) {
+        if (!n || typeof n !== 'object') continue;
+        const s = Number(n.s ?? n.string);
+        const f = Number(n.f ?? n.fret);
+        const midi = midiFromPianoNote(s, f);
+        if (midi !== null) midis.push(midi);
+      }
+      if (midis.length === 0) return null;
+      return identifyFromMidis(midis, options);
+    }
+
     const capo = options.capo || 0;
     const stringCount = options.stringCount || (options.tuning && options.tuning.length) || 6;
     const tuning = options.tuning && options.tuning.length ? options.tuning : new Array(stringCount).fill(0);
@@ -196,6 +230,19 @@ if (!window[`__${PLUGIN_ID}_installed`]) {
     return identifyFromMidis(midiNotes, opts);
   }
 
+  // Shared instrument-detection: both identifyFromHighway and the
+  // chart-transform provider (_transformInput) need the same isBass/isPiano
+  // read off a songInfo-shaped object, so it lives here once rather than
+  // being reimplemented at each call site.
+  const _getArrangementContext = (songInfo) => {
+    const info = songInfo || {};
+    const arrangementText = `${info.arrangement || ""} ${info.arrangement_smart_name || ""}`;
+    return {
+      isBass: /bass/i.test(arrangementText),
+      isPiano: KEYS_PATTERNS.test(arrangementText),
+    };
+  };
+
   function identifyFromHighway(chordNotes, highway) {
     const hw = highway || window.highway;
     if (!hw || typeof hw.getSongInfo !== "function") {
@@ -203,12 +250,13 @@ if (!window[`__${PLUGIN_ID}_installed`]) {
     }
     const songInfo = hw.getSongInfo() || {};
     const stringCount = typeof hw.getStringCount === "function" ? hw.getStringCount() : undefined;
-    const isBass = /bass/i.test(`${songInfo.arrangement || ""} ${songInfo.arrangement_smart_name || ""}`);
+    const { isBass, isPiano } = _getArrangementContext(songInfo);
     return identifyChord(chordNotes, {
       tuning: songInfo.tuning,
       capo: songInfo.capo,
       stringCount,
       isBass,
+      isPiano,
     });
   }
 
@@ -234,10 +282,15 @@ if (!window[`__${PLUGIN_ID}_installed`]) {
   // `fingers` has no source in raw chart data (same as GP imports, see
   // core CLAUDE.md: "GP imports currently emit all -1 since pre-import
   // sources don't carry finger data") so it's left as the same sentinel.
-  function _shapeFromChordNotes(chordNotes, stringCount) {
+  // `noDiagram` skips the per-note fret-filling pass and returns just the
+  // all -1 sentinel shape — used for piano/keys chords, where {s, f} is a
+  // MIDI bucket rather than a string+fret position and a per-string shape
+  // has no meaning.
+  const _shapeFromChordNotes = (chordNotes, stringCount, noDiagram) => {
     const n = Math.max(1, Number(stringCount) || 6);
     const frets = new Array(n).fill(-1);
     const fingers = new Array(n).fill(-1);
+    if (noDiagram) return { frets, fingers };
     for (const note of chordNotes || []) {
       if (!note || typeof note !== "object") continue;
       const s = Number(note.s ?? note.string);
@@ -246,7 +299,7 @@ if (!window[`__${PLUGIN_ID}_installed`]) {
       frets[s] = f;
     }
     return { frets, fingers };
-  }
+  };
 
   // `chords` is the raw wire-format array (`{ t, id, notes: [{s,f,...}] }`,
   // see core's WebSocket protocol reference — `id` indexes `chordTemplates`).
@@ -270,7 +323,7 @@ if (!window[`__${PLUGIN_ID}_installed`]) {
       if (!Array.isArray(chord.notes) || chord.notes.length === 0) continue;
       if (!_templateNeedsGeneration(templates[id])) continue;
 
-      const shape = _shapeFromChordNotes(chord.notes, stringCount);
+      const shape = _shapeFromChordNotes(chord.notes, stringCount, options.isPiano);
       const identified = identifyChord(chord.notes, options);
       const existingName = templates[id] && templates[id].name;
       templates[id] = {
@@ -294,12 +347,13 @@ if (!window[`__${PLUGIN_ID}_installed`]) {
   function _transformInput(input) {
     const chords = Array.isArray(input.allChords) ? input.allChords : input.chords;
     const songInfo = input.songInfo || {};
-    const isBass = /bass/i.test(`${songInfo.arrangement || ""} ${songInfo.arrangement_smart_name || ""}`);
+    const { isBass, isPiano } = _getArrangementContext(songInfo);
     const merged = generateChordTemplates(chords, input.chordTemplates, {
       tuning: songInfo.tuning,
       capo: songInfo.capo,
       stringCount: input.stringCount,
       isBass,
+      isPiano,
     });
     return merged ? { chordTemplates: merged } : null;
   }
@@ -785,8 +839,11 @@ if (!window[`__${PLUGIN_ID}_installed`]) {
     findLineIndex: _findLineIndex,
     baseOpenStringMidis,
     pitchFromBase,
+    midiFromPianoNote,
     noteName,
     CHORD_QUALITIES,
+    KEYS_PATTERNS,
+    getArrangementContext: _getArrangementContext,
     detectChordsFromAudio,
     // Not part of the public API (see README) — exposed only so
     // tests/chord_lyrics_view.test.js can drive the chord/lyrics view's

@@ -49,6 +49,22 @@ class ChartBridgeTests(unittest.TestCase):
         self.assertEqual(result["resolvedIdentities"][1], result["identities"][0])
         self.assertEqual(result["resolvedNames"], ["Open E5", "Open E5"])
 
+    def test_piano_arrangement_derives_isPiano_without_explicit_context_flag(self):
+        # chordr#19 follow-up: the fixed-script bridge is a separate entry
+        # point from the browser's identifyFromHighway and must derive
+        # isPiano from `arrangement` itself rather than requiring every
+        # server-side caller to already know and pass chordr's isPiano
+        # option. C major (MIDI 60, 64, 67) encoded as piano wire notes
+        # (s=floor(midi/24), f=midi%24) must resolve to C, not the guitar
+        # string+fret misread of D.
+        piano_chord = {
+            "id": 0,
+            "notes": [{"s": 2, "f": 12}, {"s": 2, "f": 16}, {"s": 2, "f": 19}],
+        }
+        result = _service()([piano_chord], context={"arrangement": "Piano"}, templates=[])
+        self.assertEqual(result["identities"][0]["rootName"], "C")
+        self.assertEqual(result["identities"][0]["displayName"], "C")
+
     def test_chart_analysis_reports_missing_node(self):
         with patch.object(routes.shutil, "which", return_value=None):
             with self.assertRaises(RuntimeError) as ctx:
