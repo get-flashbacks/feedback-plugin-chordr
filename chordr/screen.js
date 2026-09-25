@@ -157,6 +157,39 @@ if (!window[`__${PLUGIN_ID}_installed`]) {
     return identifyFromMidis(midis, options);
   }
 
+  // Group consecutive chord events by their played fret/string shape. A
+  // voicing containing only notes of the active chord is a continuation of
+  // that chord, even when an importer gave the partial its own unnamed
+  // template. Keep the full parent shape active across repeated partials;
+  // comparing only with the immediately previous partial would incorrectly
+  // start a new group when the next strum selects different chord tones.
+  // This is deliberately a physical-shape test, not a pitch-class guess:
+  // an unfamiliar or inverted shape must remain a separate, reviewable event.
+  function groupChordEvents(chords) {
+    if (!Array.isArray(chords)) return [];
+    const result = [];
+    let parentIndex = -1;
+    let parentShape = new Set();
+    for (let i = 0; i < chords.length; i++) {
+      const shape = new Set();
+      for (const note of chords[i]?.notes || []) {
+        const s = Number(note?.s ?? note?.string);
+        const f = Number(note?.f ?? note?.fret);
+        if (Number.isInteger(s) && s >= 0 && Number.isInteger(f) && f >= 0) {
+          shape.add(`${s}:${f}`);
+        }
+      }
+      const continuation = shape.size > 0 && parentShape.size > 0 &&
+        [...shape].every((key) => parentShape.has(key));
+      if (!continuation) {
+        parentIndex = i;
+        parentShape = shape;
+      }
+      result.push({ parentIndex, continuation });
+    }
+    return result;
+  }
+
   function identifyPianoChord(midiNotes, opts) {
     if (!Array.isArray(midiNotes) || midiNotes.length === 0) return null;
     return identifyFromMidis(midiNotes, opts);
@@ -743,6 +776,7 @@ if (!window[`__${PLUGIN_ID}_installed`]) {
 
   window.chordr = {
     identifyChord,
+    groupChordEvents,
     identifyPianoChord,
     identifyFromHighway,
     generateChordTemplates,

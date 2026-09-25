@@ -11,6 +11,8 @@ audio paths itself.
 """
 
 import logging
+import json
+import subprocess
 import tempfile
 from pathlib import Path
 
@@ -41,6 +43,30 @@ _CONTENT_TYPE_SUFFIX = {
 def setup(app: FastAPI, context: dict) -> None:
     log = context.get("log") or logging.getLogger(f"feedBack.plugin.{PLUGIN_ID}")
     audio_chords = context["load_sibling"]("audio_chords")
+
+    def analyze_chart_chords(chords: list, *, context: dict | None = None,
+                             templates: list | None = None) -> dict:
+        """Versioned in-process service for server-side sibling consumers.
+
+        Chordr's browser implementation remains the single source of truth:
+        the small Node bridge invokes that implementation in one batch.
+        This service only analyzes chart data and never changes a pack.
+        """
+        if not isinstance(chords, list) or len(chords) > 100_000:
+            raise ValueError("invalid chord list")
+        payload = json.dumps({"chords": chords, "context": context or {},
+                              "templates": templates or []})
+        if len(payload) > 8_000_000:
+            raise ValueError("chord analysis input too large")
+        result = subprocess.run(
+            ["node", str(Path(__file__).with_name("analyze_cli.js"))],
+            input=payload, text=True, capture_output=True, timeout=20, check=False,
+        )
+        if result.returncode != 0:
+            raise RuntimeError("chordr chart analysis failed")
+        return json.loads(result.stdout)
+
+    app.state.chordr_analyze_chart_chords_v1 = analyze_chart_chords
 
     @app.post(f"/api/plugins/{PLUGIN_ID}/detect_chords")
     async def detect_chords(request: Request) -> JSONResponse:
