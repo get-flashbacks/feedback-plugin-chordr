@@ -18,14 +18,16 @@ process.stdin.on('end', () => {
     const identities = chords.map((chord) =>
       window.chordr.identifyChord(chord?.notes, context));
     const resolvedIdentities = grouped.map((group, index) =>
-      identities[group.continuation ? group.parentIndex : index] || null);
+      identities.at(group.continuation ? group.parentIndex : index) || null);
     const names = chords.map((chord, index) => {
-      const authored = templates[Number(chord?.id)]?.name;
+      const templateIndex = Number(chord?.id);
+      const authored = Number.isSafeInteger(templateIndex) && templateIndex >= 0
+        ? templates.at(templateIndex)?.name : null;
       return (typeof authored === 'string' && authored.trim()) ||
-        identities[index]?.displayName || null;
+        identities.at(index)?.displayName || null;
     });
     const resolvedNames = grouped.map((group, index) =>
-      names[group.continuation ? group.parentIndex : index] || null);
+      names.at(group.continuation ? group.parentIndex : index) || null);
     process.stdout.write(JSON.stringify({ grouped, identities, resolvedIdentities, resolvedNames }));
   } catch (error) {
     process.stderr.write(`${error.message}\n`);

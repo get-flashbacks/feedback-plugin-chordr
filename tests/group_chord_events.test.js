@@ -4,9 +4,8 @@ const assert = require('node:assert/strict');
 
 function chordr() {
   global.window = {};
-  const path = require.resolve('../chordr/screen.js');
-  delete require.cache[path];
-  require(path);
+  delete require.cache[require.resolve('../chordr/screen.js')];
+  require('../chordr/screen.js');
   return global.window.chordr;
 }
 

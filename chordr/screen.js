@@ -165,14 +165,15 @@ if (!window[`__${PLUGIN_ID}_installed`]) {
   // start a new group when the next strum selects different chord tones.
   // This is deliberately a physical-shape test, not a pitch-class guess:
   // an unfamiliar or inverted shape must remain a separate, reviewable event.
-  function groupChordEvents(chords) {
+  const groupChordEvents = (chords) => {
     if (!Array.isArray(chords)) return [];
     const result = [];
     let parentIndex = -1;
     let parentShape = new Set();
-    for (let i = 0; i < chords.length; i++) {
+    chords.forEach((chord, i) => {
       const shape = new Set();
-      for (const note of chords[i]?.notes || []) {
+      const notes = Array.isArray(chord?.notes) ? chord.notes : [];
+      for (const note of notes) {
         const s = Number(note?.s ?? note?.string);
         const f = Number(note?.f ?? note?.fret);
         if (Number.isInteger(s) && s >= 0 && Number.isInteger(f) && f >= 0) {
@@ -186,9 +187,9 @@ if (!window[`__${PLUGIN_ID}_installed`]) {
         parentShape = shape;
       }
       result.push({ parentIndex, continuation });
-    }
+    });
     return result;
-  }
+  };
 
   function identifyPianoChord(midiNotes, opts) {
     if (!Array.isArray(midiNotes) || midiNotes.length === 0) return null;

@@ -12,6 +12,7 @@ audio paths itself.
 
 import logging
 import json
+import shutil
 import subprocess
 import tempfile
 from pathlib import Path
@@ -58,8 +59,13 @@ def setup(app: FastAPI, context: dict) -> None:
                               "templates": templates or []})
         if len(payload) > 8_000_000:
             raise ValueError("chord analysis input too large")
+        node = shutil.which("node")
+        if node is None:
+            raise RuntimeError("Node.js is required for chordr chart analysis")
+        node_executable = Path(node).resolve(strict=True)
+        bridge = Path(__file__).with_name("analyze_cli.js").resolve(strict=True)
         result = subprocess.run(
-            ["node", str(Path(__file__).with_name("analyze_cli.js"))],
+            [str(node_executable), str(bridge)],
             input=payload, text=True, capture_output=True, timeout=20, check=False,
         )
         if result.returncode != 0:
