@@ -24,10 +24,12 @@ one specific feature each (not for their base operation):
   the same capability and degrades to a warning, not a failure, when it's
   missing — see that repo's `CLAUDE.md`.
 
-Neither consumer gates on a specific Chordr version — both feature-detect
-the capability's presence (`getattr(app.state,
+Neither consumer gates on a specific Chordr version — both detect the
+capability's presence at call time (`getattr(app.state,
 "chordr_analyze_chart_chords_v1", None)` / `chordr_analyzer is None`) and
-degrade gracefully when it's absent. This plugin's `plugin.json` is
+handle its absence: `difficulty_ladder` returns HTTP 503 (see above),
+`feedpakr` degrades to a warning and no-ops rather than failing the
+build. This plugin's `plugin.json` is
 currently at `0.5.1`; the chart-transform block has been declared in its
 current canonical shape since `0.2.0` (commit `084e1b2`). If you change
 what `chart-transform`/`analyze_chart_chords_v1` returns or how it's
@@ -72,8 +74,8 @@ before assuming a given host can run it.
   enrichment, not just pick one version.
 - **A known lyrics-view filename-resolution bug exists** (referenced in
   the last line of issue #21's body: "the known lyrics-view filename bug
-  is separate and cannot be fixed by raising minHost"; #21 is still open,
-  with no comments). The root cause is in this repo: `_connectLyricsSocket`
+  is separate and cannot be fixed by raising minHost"; #21 is still open).
+  The root cause is in this repo: `_connectLyricsSocket`
   (`chordr/screen.js:593-595`) bails out with `if (!songInfo ||
   !songInfo.filename || ...) return;`, but the real `song_info` WebSocket
   payload carries no `filename` field at all (it has `tuning`,
