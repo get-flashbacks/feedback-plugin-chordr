@@ -15,17 +15,22 @@ Chordr isn't just a standalone feature — it's infrastructure two other
 plugins in this org call into directly, both as a *hard* dependency for
 one specific feature each (not for their base operation):
 
-- **`feedback-plugin-difficulty-ladder`**'s `/group-chords` route calls
-  `app.state.chordr_analyze_chart_chords_v1` and returns HTTP 503 if it's
-  absent — see that repo's `CLAUDE.md` and issue #130.
+- **`feedback-plugin-difficulty-ladder`**'s `POST
+  /api/plugins/difficulty_ladder/analyze-chords` route (`routes.py:3319`)
+  calls `app.state.chordr_analyze_chart_chords_v1` and returns HTTP 503 if
+  it's absent — see that repo's `README.md` and issue #130.
 - **`feedBack-plugin-feedpakr`**'s optional chord-naming enhancement
   (`build_feedpak(..., chordr_analyzer=..., enhance_chords=True)`) reads
   the same capability and degrades to a warning, not a failure, when it's
   missing — see that repo's `CLAUDE.md`.
 
-Both consumers gate on Chordr **v0.5.0** as the first auditable version
-that registers this capability. If you change what
-`chart-transform`/`analyze_chart_chords_v1` returns or how it's
+Neither consumer gates on a specific Chordr version — both feature-detect
+the capability's presence (`getattr(app.state,
+"chordr_analyze_chart_chords_v1", None)` / `chordr_analyzer is None`) and
+degrade gracefully when it's absent. This plugin's `plugin.json` is
+currently at `0.5.1`; the chart-transform block has been declared in its
+current canonical shape since `0.2.0` (commit `084e1b2`). If you change
+what `chart-transform`/`analyze_chart_chords_v1` returns or how it's
 registered, both of those repos' consuming code needs to be checked, not
 just this one's tests.
 
@@ -66,23 +71,40 @@ before assuming a given host can run it.
   fix needs to distinguish analysis-only operation from automatic
   enrichment, not just pick one version.
 - **A known lyrics-view filename-resolution bug exists** (referenced in
-  issue #21's closing note: "the known lyrics-view filename bug is
-  separate and cannot be fixed by raising minHost"). If you're asked to
-  raise `minHost` as a fix for a chord/lyrics overlay bug report, check
-  whether it's actually this pre-existing, separately-tracked issue
-  first — a version bump won't fix it.
+  the last line of issue #21's body: "the known lyrics-view filename bug
+  is separate and cannot be fixed by raising minHost"; #21 is still open,
+  with no comments). The root cause is in this repo: `_connectLyricsSocket`
+  (`chordr/screen.js:593-595`) bails out with `if (!songInfo ||
+  !songInfo.filename || ...) return;`, but the real `song_info` WebSocket
+  payload carries no `filename` field at all (it has `tuning`,
+  `stringCount`, `capo`, `arrangement`, `audio_url`, etc.) — so the guard
+  is always true and the lyrics socket never opens against a real host.
+  The audio-detection path a few lines down already works around this by
+  keying its cache on `songInfo.audio_url` instead (`chordr/screen.js:646`,
+  with a comment noting exactly this). The fix is to use the same
+  `audio_url`-keyed approach, or `window.feedBack.currentSong.filename`
+  (derived by core from the WS URL), not `songInfo.filename`. The unit
+  tests don't catch this because they mock `getSongInfo` to return a
+  `filename` field the real host never sends. If you're asked to raise
+  `minHost` as a fix for a chord/lyrics overlay bug report, check whether
+  it's actually this pre-existing, separately-tracked issue first — a
+  version bump won't fix it.
 
 ## Testing
 
 ```bash
-node --test tests/*.test.js                                    # 70 pass
-python3 -m pytest tests/test_audio_chords.py tests/test_chart_bridge.py   # 17 pass
+node --test tests/*.test.js                                             # 78 pass
+python3 -m unittest tests/test_audio_chords.py tests/test_chart_bridge.py  # 18 pass
 ```
 
-Both suites run clean in this sandbox with no missing dependencies, unlike
-some sibling repos in this org — if either starts failing on setup/import
-errors rather than real assertions, suspect the environment before the
-code.
+The JS suite has no third-party dependencies. `test_chart_bridge.py`
+imports `fastapi` at module top — install it (`python3 -m pip install
+fastapi`) if it's missing, since that's a real, documented prerequisite,
+not an environment fluke. This repo uses stdlib `unittest`, not pytest —
+there's no `pytest.ini`/pytest requirement, so `python3 -m pytest` may
+fail outright with `No module named pytest` depending on the sandbox. A
+real assertion failure in either suite is always worth reading, not
+dismissed as environment noise.
 
 ## Versioning
 
