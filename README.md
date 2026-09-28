@@ -115,20 +115,24 @@ diagram enrichment:
 | **Analysis-only** — `window.chordr.*` helpers, the chord/lyrics view, audio-based detection, the server `chordr_analyze_chart_chords_v1(...)` callable | `context.load_sibling` (backend), plugin CSS + highway chart getters (frontend), Node.js ≥ 16.6 on the host for server-side chord analysis | Works on any feedBack core that loads plugins at all |
 | **Automatic chart enrichment** — `chart-transform` provider registration so `highway.getChordTemplates()` picks up generated diagrams without any per-plugin integration | Core's chart-transform capability (feedBack#952) | Core commit [`05be9eb`](https://github.com/got-feedBack/feedBack/commit/05be9eb) or later — landed July 19, after the `v0.3.0-alpha.1` tag. No tagged core release has been audited against this yet; treat the commit hash as the floor until one is |
 
-On a host below the enrichment floor, the plugin does **not** silently
-appear fully functional: `_registerChartTransform()` logs a `console.warn`
-and `window.chordr.getChartTransformStatus()` returns one of four states
+`window.chordr.getChartTransformStatus()` reports one of four states
 (checked against each dispatch's resolved `status` — core's capability
 dispatch *resolves* on failure, e.g. `{status: 'no-owner'}` when nothing
 owns the capability at all, rather than rejecting, so "the promise chain
-completed" is not by itself evidence of success):
+completed" is not by itself evidence of success). It's written once at
+registration time and never revisited — it reflects how registration/
+selection resolved, not live per-song rendering: core stages the transform
+onto highway surfaces lazily (on `song:ready`/`highway:created`), and
+Chordr's own transform can legitimately return no diagram for a chart it
+doesn't need to enrich, so `"active"` is not proof any diagram has actually
+rendered:
 
 | Status | Meaning |
 | --- | --- |
-| `"pending"` | Registration hasn't resolved yet |
-| `"active"` | Registered **and** currently the selected provider — diagrams are reaching `highway.getChordTemplates()` |
-| `"registered"` | Registered successfully, but a different provider currently holds the selection (expected under `ownership: "multi-provider"`) — this provider's diagrams are not live, but this is not a host-compatibility gap and does not log a warning |
-| `"unavailable"` | No capabilities API on this host, or `register-provider`/`inspect`/`select-provider` resolved with a non-success status — logs a `console.warn` naming which step failed |
+| `"pending"` | Registration hasn't resolved yet. This is also the **permanent** value on a core with no capabilities framework at all — that tier never calls `_registerChartTransform()` in the first place (it waits forever on an event only the framework emits), so it never reaches the `"unavailable"` branch or logs a warning |
+| `"active"` | Core's chart-transform coordinator currently selects **this** provider |
+| `"registered"` | Registered successfully, but not currently selected — either a different provider holds the selection (expected under `ownership: "multi-provider"`, not a warning), or this provider's own self-select attempt resolved non-success (also not a warning). Either way, this provider's diagrams are not live |
+| `"unavailable"` | The capabilities framework is present but `register-provider`/`inspect`/`select-provider` resolved with a non-success status (typically: no `chart-transform` owner registered on this host) — logs a `console.warn` naming which step failed |
 
 Analysis-only consumers (`window.chordr.*` outside this accessor, the
 chord/lyrics view, audio detection) are unaffected by any of these states.

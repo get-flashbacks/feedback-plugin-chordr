@@ -142,9 +142,14 @@ test('does not select itself, and reports "registered", when another provider is
 test('getChartTransformStatus is "unavailable" (with a console.warn) when window.feedBack.capabilities has no dispatch', (t) => {
     // window.feedBack.capabilities being present (but non-functional) is what
     // makes _registerChartTransform() run synchronously at load instead of
-    // waiting on the 'feedBack:capabilities:ready' event (a host with no
-    // window.feedBack.capabilities at all never fires that event, so this
-    // is the reachable "unavailable" case, not an untested one).
+    // waiting on the 'feedBack:capabilities:ready' event. A host with no
+    // window.feedBack.capabilities at all never fires that event either
+    // (core's capabilities.js publishes both in the same synchronous
+    // block), so that tier can't reach this "unavailable" branch at all —
+    // it stays "pending" forever instead. This test covers the tier that
+    // genuinely can: the framework loaded, but with no functioning
+    // dispatch (e.g. a capabilities object shaped wrong, or a partial
+    // polyfill).
     // t.mock.method restores console.warn automatically at test end (even
     // on failure), rather than a manual reassign/restore that leaks state
     // across tests if an assertion throws first.

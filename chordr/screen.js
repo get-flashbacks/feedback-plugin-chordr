@@ -367,15 +367,26 @@ if (!window[`__${PLUGIN_ID}_installed`]) {
   // only rejects on a genuinely unexpected exception — so every dispatch
   // below must be checked against its resolved `status`, not just whether
   // the promise chain completed. _chartTransformStatus makes the outcome
-  // introspectable (README's Host compatibility section documents this):
-  //   "pending"    — registration hasn't resolved yet
-  //   "active"     — registered AND currently the selected provider;
-  //                  diagrams are reaching highway.getChordTemplates()
-  //   "registered" — registered successfully, but a different provider
-  //                  currently holds the selection (multi-provider
-  //                  ownership) — this provider's diagrams are not live
-  //   "unavailable"— no capabilities API, or register/inspect/select
-  //                  resolved with a non-success status
+  // introspectable (README's Host compatibility section documents this).
+  // Written once at registration time and never revisited afterward — it
+  // reflects how registration/selection resolved, NOT live per-song
+  // rendering (core stages the transform onto highway surfaces lazily, on
+  // song:ready/highway:created, and Chordr's own transform can legitimately
+  // return null for a chord it doesn't need to enrich) — a later
+  // clear-provider or a transform that throws on every chart still reads
+  // whatever this resolved to:
+  //   "pending"    — registration hasn't resolved yet (also the permanent
+  //                  value on a core with no capabilities framework at
+  //                  all — see the no-dispatch guard below)
+  //   "active"     — core's chart-transform coordinator currently selects
+  //                  THIS provider; not proof any diagram has rendered
+  //   "registered" — registered successfully, but not currently selected
+  //                  (a different provider holds the selection, or this
+  //                  provider's own self-select attempt didn't resolve
+  //                  successfully) — this provider's diagrams are not live
+  //   "unavailable"— register-provider/inspect/select-provider resolved
+  //                  with a non-success status (framework present, no
+  //                  chart-transform owner registered for it)
   let _chartTransformStatus = "pending";
 
   // "applied"/"overridden" are the only success statuses _dispatchStatus()
@@ -410,6 +421,13 @@ if (!window[`__${PLUGIN_ID}_installed`]) {
   // addEventListener expects.
   const _registerChartTransform = () => {
     const api = window.feedBack && window.feedBack.capabilities;
+    // Defensive only: on a real feedBack build, capabilities.js publishes
+    // window.feedBack.capabilities and fires 'feedBack:capabilities:ready'
+    // in the same synchronous block, and v3/index.html loads it before the
+    // plugin scripts that would call this function — so this branch isn't
+    // actually reachable from the caller below, which instead just waits
+    // forever on an event a host with no capabilities framework never
+    // fires (status stays "pending", not "unavailable", on that tier).
     if (!api || typeof api.dispatch !== "function") {
       _warnChartTransformUnavailable("no capabilities API on this host");
       return;
@@ -467,7 +485,8 @@ if (!window[`__${PLUGIN_ID}_installed`]) {
           _chartTransformStatus = "active";
         } else {
           // Registration itself succeeded — only the self-select step
-          // failed, which is not a host-compatibility gap, so this
+          // resolved non-success (e.g. an unknown provider id), which is
+          // not a host-compatibility gap, so this
           // doesn't warn the way an unavailable capability does.
           _chartTransformStatus = "registered";
         }
@@ -926,13 +945,18 @@ if (!window[`__${PLUGIN_ID}_installed`]) {
     getArrangementContext: _getArrangementContext,
     detectChordsFromAudio,
     // chordr#21 — "pending" | "active" | "registered" | "unavailable".
-    // "active" means diagrams are actually reaching the highway;
-    // "registered" means this provider is installed but a different one
-    // currently holds the selection. Lets a caller distinguish either from
-    // "unavailable" instead of assuming enrichment is live just because
-    // window.chordr exists (analysis-only helpers work regardless of this
-    // status). See _registerChartTransform's own comment for the full
-    // state contract.
+    // "active" means core's chart-transform coordinator currently selects
+    // THIS provider — not proof any diagram has actually rendered, since
+    // core stages the transform onto highway surfaces lazily and Chordr's
+    // own transform can return null for a chart it doesn't need to enrich.
+    // "registered" means installed but not currently selected (either a
+    // different provider holds the selection, or this provider's own
+    // self-select attempt didn't resolve successfully). Lets a caller
+    // distinguish either from "unavailable" instead of assuming enrichment
+    // is live just because window.chordr exists (analysis-only helpers
+    // work regardless of this status). See _registerChartTransform's own
+    // comment for the full state contract, including its one-time-at-load
+    // caveat.
     getChartTransformStatus: () => _chartTransformStatus,
     // Not part of the public API (see README) — exposed only so
     // tests/chord_lyrics_view.test.js can drive the chord/lyrics view's

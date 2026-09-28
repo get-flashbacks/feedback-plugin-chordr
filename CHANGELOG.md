@@ -9,17 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- `window.chordr.getChartTransformStatus()` reports whether automatic
-  chord-diagram enrichment (the `chart-transform` provider) is actually
-  active on the current host (`"pending"` / `"active"` / `"registered"` /
-  `"unavailable"`), and a `console.warn` fires when it can't register —
-  instead of silently degrading and looking fully enabled on a host below
-  the enrichment floor. Every `dispatch()` call is checked against its
-  *resolved* `status` (core's capability dispatch resolves on failure,
-  e.g. `{status: 'no-owner'}`, rather than rejecting) — an earlier version
-  of this fix only checked promise resolve/reject and so reported
-  `"active"` on exactly the unsupported-host tier it was meant to detect.
-  README documents the resulting two-tier host-compatibility requirement
+- `window.chordr.getChartTransformStatus()` reports whether the
+  `chart-transform` provider is registered and currently selected on this
+  host (`"pending"` / `"active"` / `"registered"` / `"unavailable"`), and
+  a `console.warn` fires when registration can't succeed — instead of
+  silently degrading and looking fully enabled on a host below the
+  enrichment floor. Every `dispatch()` call is checked against its
+  *resolved* `status`, since core's capability dispatch resolves on
+  failure (e.g. `{status: 'no-owner'}`) rather than rejecting. README
+  documents the resulting two-tier host-compatibility requirement
   (analysis-only vs. automatic enrichment) and the four-state status
   contract. (#21)
 
