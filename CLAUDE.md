@@ -30,7 +30,7 @@ capability's presence at call time (`getattr(app.state,
 handle its absence: `difficulty_ladder` returns HTTP 503 (see above),
 `feedpakr` degrades to a warning and no-ops rather than failing the
 build. This plugin's `plugin.json` is
-currently at `0.5.2`; the chart-transform block has been declared in its
+currently at `0.5.3`; the chart-transform block has been declared in its
 current canonical shape since `0.2.0` (commit `084e1b2`). If you change
 what `chart-transform`/`analyze_chart_chords_v1` returns or how it's
 registered, both of those repos' consuming code needs to be checked, not
@@ -84,23 +84,33 @@ before assuming a given host can run it.
   enrichment, not just pick one version.
 - **The lyrics-view filename-resolution bug is fixed** (was referenced in
   the last line of issue #21's body: "the known lyrics-view filename bug
-  is separate and cannot be fixed by raising minHost"). Root cause:
-  `_connectLyricsSocket` bailed with `if (!songInfo || !songInfo.filename
-  || ...) return;`, but the real `song_info` WebSocket payload carries no
-  `filename` field at all (it has `tuning`, `stringCount`, `capo`,
-  `arrangement`, `audio_url`, etc.) — so the guard was always true and the
-  lyrics socket never opened against a real host. Fixed by switching to
-  `window.feedBack.currentSong.filename`/`.arrangementIndex` (core's own
-  copy, derived from the WS URL) — the same approach the audio-detection
-  path already used (keying its cache on `songInfo.audio_url` instead) for
-  the identical reason. If a future chord/lyrics overlay bug report looks
-  similar, check it's not a regression of this fix before assuming it's a
-  new issue or a `minHost` problem.
+  is separate and cannot be fixed by raising minHost"). Two defects, one
+  chain: `_connectLyricsSocket` bailed with `if (!songInfo ||
+  !songInfo.filename || ...) return;`, but the real `song_info` WebSocket
+  payload carries no `filename` field at all (it has `tuning`, `stringCount`,
+  `capo`, `arrangement`, `audio_url`, etc.) — so the guard was always true
+  and the lyrics socket never opened against a real host. Switching to
+  `window.feedBack.currentSong.filename`/`.arrangementIndex` fixed the
+  open, but NOT the reconnect: core assigns `currentSong` inside its
+  `song_info` handler, one WebSocket round trip *after* `playSong` returns
+  (core's CLAUDE.md Pitfall #1), so a read in the `playSong` wrapper
+  subscribed to the song being left behind, or to nothing on the first song
+  after the view was enabled. The reconnect is now driven by core's own
+  `song:loaded` event — its `detail` *is* the `currentSong` object —
+  subscribed while the view is active and removed on close; the `playSong`
+  wrap keeps only its stale-state clear, since a `getSongInfo()` read there
+  is stale in exactly the same way (the audio-detection path hid this by
+  re-checking `audio_url` before attaching). If a future chord/lyrics
+  overlay bug report looks similar, check it's not a regression of this fix
+  before assuming it's a new issue or a `minHost` problem. The unit tests
+  cover it by stubbing core's event bus and publishing `currentSong` only
+  when a fake `song_info` lands — a suite that pre-seeds the field passes
+  against a reconnect that reads it too early.
 
 ## Testing
 
 ```bash
-node --test tests/*.test.js                                             # 78 pass
+node --test tests/*.test.js                                             # 81 pass
 python3 -m pip install -r tests/requirements.txt
 python3 -m unittest discover -s tests -p 'test_*.py'                    # 18 pass
 ```
