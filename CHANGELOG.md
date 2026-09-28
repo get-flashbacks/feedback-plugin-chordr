@@ -11,12 +11,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `window.chordr.getChartTransformStatus()` reports whether the
   `chart-transform` provider is registered and currently selected on this
-  host (`"pending"` / `"active"` / `"registered"` / `"unavailable"`), and
-  a `console.warn` fires when registration can't succeed — instead of
-  silently degrading and looking fully enabled on a host below the
-  enrichment floor. Every `dispatch()` call is checked against its
-  *resolved* `status`, since core's capability dispatch resolves on
-  failure (e.g. `{status: 'no-owner'}`) rather than rejecting. README
+  host (`"pending"` / `"active"` / `"registered"` / `"unavailable"`).
+  On a core that has the capabilities framework but no `chart-transform`
+  owner registered (any build before `05be9eb`), every dispatch resolves
+  a failure status (e.g. `{status: 'no-owner'}`) rather than rejecting,
+  and this is now checked explicitly — the accessor reports
+  `"unavailable"` and a single `console.warn` fires, instead of silently
+  looking fully enabled. (A core with no capabilities framework at all
+  never calls into this path in the first place — see README's Host
+  compatibility section for that tier's `"pending"` floor.) README
   documents the resulting two-tier host-compatibility requirement
   (analysis-only vs. automatic enrichment) and the four-state status
   contract. (#21)
