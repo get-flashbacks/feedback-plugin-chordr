@@ -96,13 +96,18 @@ before assuming a given host can run it.
 
 ```bash
 node --test tests/*.test.js                                             # 78 pass
-python3 -m pip install -r tests/requirements.txt\npython3 -m unittest discover -s tests -p 'test_*.py'                # 18 pass
+python3 -m pip install -r tests/requirements.txt
+python3 -m unittest discover -s tests -p 'test_*.py'                    # 18 pass
 ```
 
 The JS suite has no third-party dependencies. `test_chart_bridge.py`
-imports `fastapi` at module top — install it (`python3 -m pip install
-fastapi`) if it's missing, since that's a real, documented prerequisite,
-not an environment fluke. This repo uses stdlib `unittest`, not pytest —
+imports `fastapi` at module top, so `python3 -m pip install -r
+tests/requirements.txt` is a real, documented prerequisite, not an
+environment fluke. `fastapi` is deliberately absent from
+`chordr/requirements.txt`: `chordr/routes.py` imports it at module
+scope, but every feedBack host already runs FastAPI and installs the
+plugin's requirements file on top of its own environment, so the host
+supplies the package. This repo uses stdlib `unittest`, not pytest —
 there's no `pytest.ini`/pytest requirement, so `python3 -m pytest` may
 fail outright with `No module named pytest` depending on the sandbox. A
 real assertion failure in either suite is always worth reading, not
