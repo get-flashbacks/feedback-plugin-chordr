@@ -694,13 +694,28 @@ if (!window[`__${PLUGIN_ID}_installed`]) {
     if (idx >= 0) _updateSungState(viewState, time);
   };
 
-  const _connectLyricsSocket = (highway) => {
-    const songInfo = highway.getSongInfo ? highway.getSongInfo() : null;
-    if (!songInfo || !songInfo.filename || typeof WebSocket === "undefined") return;
+  // `song` is core's `currentSong` object (see _startView and _onSongLoaded).
+  // The real `song_info` WebSocket payload carries no `filename` field at all
+  // (tuning/stringCount/capo/arrangement/audio_url/... — see core CLAUDE.md's
+  // WS protocol reference), so `highway.getSongInfo().filename` is always
+  // undefined on a real host. `filename` is core's own copy of the WS URL's
+  // path segment, already decoded — so it is encoded exactly once below, never
+  // decoded. `arrangementIndex` is copied straight from
+  // `song_info.arrangement_index`, i.e. the server-RESOLVED index (always
+  // >= 0), not the requested query param (which may be -1 for "smart
+  // auto-pick") — so passing it back is safe.
+  const _connectLyricsSocket = (song) => {
+    // A reconnect replaces the open socket rather than leaking it: the
+    // previous song's socket would still deliver its own `lyrics` message and
+    // overwrite the new song's lines.
+    if (viewState.ws) {
+      viewState.ws.close();
+      viewState.ws = null;
+    }
+    if (!song || !song.filename || typeof WebSocket === "undefined") return;
 
-    let name = songInfo.filename;
-    try { name = decodeURIComponent(name); } catch (_) { /* already decoded */ }
-    const arrIndex = songInfo.arrangement_index || 0;
+    const name = song.filename;
+    const arrIndex = song.arrangementIndex || 0;
     const scheme = location.protocol === "https:" ? "wss" : "ws";
     const url = `${scheme}://${location.host}/ws/highway/${encodeURIComponent(name)}?arrangement=${arrIndex}`;
 
@@ -812,6 +827,26 @@ if (!window[`__${PLUGIN_ID}_installed`]) {
     _attachAudioChordsWhenReady(promise, requestedFor);
   };
 
+  // Core's event bus (static/capabilities.js) — an EventTarget with on/off
+  // aliases, and the only thing that publishes `song:loaded`.
+  const _songLoadedBus = () =>
+    window.feedBack && typeof window.feedBack.on === "function" ? window.feedBack : null;
+
+  // Point the view at the song core has just published, for BOTH lyrics and
+  // audio detection. This has to be driven by core publishing `currentSong`,
+  // not by the playSong wrapper resuming: core's playSong returns as soon as
+  // it has opened the WebSocket and never awaits `song_info` (core CLAUDE.md
+  // Pitfall #1), so at that instant `currentSong` still describes the song
+  // being left behind — reading it there subscribed to the previous song's
+  // lyrics, and read `null` on the first song after the view was enabled.
+  // `song:loaded`'s detail IS that object, published one round trip later.
+  const _onSongLoaded = (event) => {
+    if (!viewState.active) return;
+    _connectLyricsSocket(event && event.detail);
+    const highway = window.highway;
+    if (highway) _maybeDetectChordsFromAudio(highway);
+  };
+
   const _buildViewOverlay = () => {
     const player = document.getElementById("player");
     if (!player) return;
@@ -838,7 +873,15 @@ if (!window[`__${PLUGIN_ID}_installed`]) {
     viewState.renderedWords = [];
     viewState.audioChords = null;
     _buildViewOverlay();
-    _connectLyricsSocket(highway);
+    // Subscribe before snapshotting, and only while the view is active, so
+    // toggling can't accumulate listeners and a song that loads with the view
+    // closed can't open a lyrics socket behind the user's back.
+    const bus = _songLoadedBus();
+    if (bus) bus.on("song:loaded", _onSongLoaded);
+    // A song is always already loaded by the time a user can toggle the view
+    // on, so this path reads core's published copy directly rather than
+    // waiting for the next song:loaded.
+    _connectLyricsSocket(window.feedBack && window.feedBack.currentSong);
     _maybeDetectChordsFromAudio(highway);
     _viewLoop();
     // _wrapPlaySongForView() already ran once at plugin load, but plugins
@@ -855,6 +898,8 @@ if (!window[`__${PLUGIN_ID}_installed`]) {
   const _stopView = (btn) => {
     viewState.active = false;
     if (btn) btn.classList.remove("chordr-view-active");
+    const bus = _songLoadedBus();
+    if (bus) bus.off("song:loaded", _onSongLoaded);
     if (viewState.rafId) cancelAnimationFrame(viewState.rafId);
     viewState.rafId = null;
     if (viewState.ws) {
@@ -875,19 +920,21 @@ if (!window[`__${PLUGIN_ID}_installed`]) {
     }
   };
 
-  // Reconnect the lyrics socket on every new song while the view is active
-  // — the WS the view opened for the previous song is for the previous
-  // filename/arrangement and won't emit again.
+  // Clear the previous song's view state as soon as a new song starts
+  // loading (which can take seconds) — otherwise window.highway can already
+  // reflect the new song's chords/time while viewState.lyricLines still holds
+  // the previous song's lines, showing old lyrics against new playback.
+  //
+  // The reconnect is NOT done here. Core's playSong returns as soon as it has
+  // opened the WebSocket and never awaits song_info, so this wrapper resumes
+  // one network round trip before core publishes the new song — see
+  // _onSongLoaded, which is driven by that publish instead.
   const _wrapPlaySongForView = () => {
     if (window[`__${PLUGIN_ID}_viewPlaySongWrapped`]) return;
     if (typeof window.playSong !== "function") return;
     window[`__${PLUGIN_ID}_viewPlaySongWrapped`] = true;
     const original = window.playSong;
     window.playSong = async function (...args) {
-      // Clear stale lyrics BEFORE awaiting the new song's load (which can
-      // take seconds) — otherwise window.highway can already reflect the
-      // new song's chords/time while viewState.lyricLines still holds the
-      // previous song's lines, showing old lyrics against new playback.
       if (viewState.active) {
         if (viewState.ws) {
           viewState.ws.close();
@@ -896,14 +943,8 @@ if (!window[`__${PLUGIN_ID}_installed`]) {
         viewState.lyricLines = [];
         viewState.audioChords = null;
       }
-      const result = await original.apply(this, args);
-      // Reconnect/re-detect only after the new song has loaded, so
-      // getSongInfo()/getChords() reflect it, not the previous song.
-      if (viewState.active && window.highway) {
-        _connectLyricsSocket(window.highway);
-        _maybeDetectChordsFromAudio(window.highway);
-      }
-      return result;
+      // Core's contract for this wrap: always call the original and await it.
+      return original.apply(this, args);
     };
   };
 

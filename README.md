@@ -137,9 +137,9 @@ rendered:
 Analysis-only consumers (`window.chordr.*` outside this accessor, the
 chord/lyrics view, audio detection) are unaffected by any of these states.
 
-The known lyrics-view filename-resolution bug (`_connectLyricsSocket`
-guarding on the nonexistent `songInfo.filename`) is a separate, tracked
-defect — raising `minHost` does not fix it. See `CLAUDE.md`.
+The lyrics-view filename-resolution bug once tracked here (`_connectLyricsSocket`
+guarding on the nonexistent `songInfo.filename`) is fixed — see CHANGELOG's
+`[Unreleased]` `### Fixed` entry.
 
 ## Server routes
 

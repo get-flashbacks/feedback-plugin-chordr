@@ -26,6 +26,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The chord/lyrics view (chordr#3) now actually opens its lyrics WebSocket
+  on a real host, and reopens it for the right song. Two bugs, one root
+  cause chain: `_connectLyricsSocket` guarded on
+  `highway.getSongInfo().filename`, but the real `song_info` WS payload never
+  carries a `filename` field, so the guard was always true and the socket
+  never opened — the view silently never showed lyrics. Switching to
+  `window.feedBack.currentSong.filename`/`.arrangementIndex` (core's own copy,
+  the same source the audio-detection path already keys its cache on via
+  `songInfo.audio_url`) fixed the open, but core publishes `currentSong` in
+  its `song_info` handler — one WebSocket round trip *after* `playSong`
+  returns — so a read in the `playSong` wrapper subscribed to the previous
+  song's lyrics, or to nothing on the first song after the view was enabled.
+  The reconnect is now driven by core's own `song:loaded` event (whose
+  `detail` is that object), subscribed while the view is active; the
+  `playSong` wrap keeps only its stale-state clear. Audio detection moved to
+  the same event, off the stale read it happened to self-heal from. This
+  defect never had an issue of its own: it was a paragraph in #21's body, and
+  raising `minHost` never fixed it.
 - Chord identification on piano/keys arrangements no longer misreads their
   MIDI-bucket-encoded `{s, f}` wire notes as guitar string+fret positions.
   Piano/keys arrangements (detected the same way `feedBack-plugin-piano`

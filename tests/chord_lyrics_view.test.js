@@ -3,7 +3,7 @@
 // window.chordr.buildLyricLines/findLineIndex don't already cover:
 // chord-to-word assignment, render/update/clear DOM state transitions,
 // the view loop's line-change vs. same-line branching, and the
-// playSong wrapper's reconnect-on-song-change behavior.
+// reconnect-on-song-change behavior the song:loaded event drives.
 //
 // This module has no document/WebSocket/requestAnimationFrame of its
 // own (screen.js runs in a real browser), so each test wires up the
@@ -37,6 +37,9 @@ class FakeElement {
   }
   appendChild(child) {
     this.children.push(child);
+  }
+  remove() {
+    this.removed = true;
   }
   set innerHTML(value) {
     if (value === '') this.children = [];
@@ -81,6 +84,39 @@ function mockHighway(overrides) {
     { getTime: () => 0, getChords: () => [], getChordTemplates: () => [] },
     overrides
   );
+}
+
+// Mirrors core's feedBack event bus (static/capabilities.js): `emit(name,
+// detail)` reaches the `on`/`off` subscribers as a CustomEvent whose `detail`
+// is what was emitted. Tests must not stub this as a plain object — the
+// socket reconnect is driven by the bus, not by a field read.
+function mockFeedBack(currentSong) {
+  const listeners = new Map();
+  return {
+    currentSong: currentSong || null,
+    on(name, fn) {
+      const list = listeners.get(name) || [];
+      list.push(fn);
+      listeners.set(name, list);
+    },
+    off(name, fn) {
+      listeners.set(name, (listeners.get(name) || []).filter((entry) => entry !== fn));
+    },
+    emit(name, detail) {
+      for (const fn of (listeners.get(name) || []).slice()) fn({ type: name, detail });
+    },
+    listenerCount(name) {
+      return (listeners.get(name) || []).length;
+    },
+  };
+}
+
+// What core's highway `song_info` handler does: publish currentSong, then
+// announce it. This lands one network round trip AFTER playSong has returned,
+// which is the whole point — see the song:loaded tests below.
+function corePublishSong(feedBack, song) {
+  feedBack.currentSong = song;
+  feedBack.emit('song:loaded', feedBack.currentSong);
 }
 
 function initViewState(viewState, overrides) {
@@ -308,88 +344,156 @@ test('startView returns true and activates the view when a highway is present', 
   assert.equal(chordr._internal.viewState.active, true);
 });
 
-// ── playSong wrapper (chordr#3's reconnect-on-song-change) ──────────
+// ── reconnect on song change (driven by core's song:loaded) ──────────
+//
+// These tests model core's real ordering: playSong returns as soon as it has
+// opened the WebSocket, and `song_info` (which publishes currentSong and emits
+// song:loaded) only lands a round trip later. A suite that pre-seeds
+// `currentSong` with the incoming song would pass against a reconnect that
+// reads it too early, so nothing here does that.
 
-test('the wrapped playSong resets lyrics state and opens a new lyrics socket when the view is active', async () => {
+test('a song switch reconnects the view to the song core publishes, not the one it left', async () => {
+  // Realistic starting state: a song is already playing, so core has already
+  // published currentSong for it — and that is exactly the value the view
+  // must stop using once the switch starts.
+  const feedBack = mockFeedBack({ filename: 'song-1.sloppak', arrangementIndex: 0 });
   let originalCalled = 0;
+  let publishNewSong;
   const original = async (...args) => {
     originalCalled++;
+    // Core returns as soon as it has opened the WS; the round trip that
+    // publishes the new song is still in flight.
+    publishNewSong = () => corePublishSong(feedBack, { filename: 'song-2.sloppak', arrangementIndex: 3 });
     return args;
   };
 
   const chordr = freshPlugin({
     addEventListener: () => {},
     playSong: original,
-    highway: {
-      getSongInfo: () => ({ filename: 'song-2.sloppak', arrangement_index: 0 }),
-    },
+    highway: {},
+    feedBack,
   });
 
   const { viewState } = chordr._internal;
-  const staleSocket = new FakeWebSocket('wss://example.test/stale');
-  viewState.active = true;
-  viewState.ws = staleSocket;
+  assert.equal(chordr._internal.startView(), true);
+  const staleSocket = FakeWebSocket.instances.at(-1);
+  assert.equal(
+    staleSocket.url,
+    'wss://example.test/ws/highway/song-1.sloppak?arrangement=0',
+    'sanity: opening the view connects the song that is already playing'
+  );
   viewState.lyricLines = [{ startT: 0, endT: 1, words: [] }];
 
-  assert.notEqual(global.window.playSong, original, 'playSong should have been wrapped at load time');
-
-  await global.window.playSong('song-2.sloppak');
+  const result = await global.window.playSong('song-2.sloppak');
 
   assert.equal(originalCalled, 1, 'the original playSong must still run');
-  assert.equal(staleSocket.closed, true, 'the previous song\'s lyrics socket must be closed');
+  assert.deepEqual(result, ['song-2.sloppak'], "the original's return value must pass through");
+  assert.equal(staleSocket.closed, true, "the previous song's lyrics socket must be closed");
   assert.deepEqual(viewState.lyricLines, [], 'stale lyrics must be cleared for the new song');
-  assert.notEqual(viewState.ws, staleSocket, 'a new socket must replace the stale one');
-  assert.equal(FakeWebSocket.instances.at(-1).url.includes('song-2.sloppak'), true);
+  assert.equal(
+    FakeWebSocket.instances.length,
+    1,
+    'core has not published the new song yet — reconnecting now would use the previous song'
+  );
+
+  publishNewSong();
+  await flushAsync();
+
+  assert.equal(FakeWebSocket.instances.length, 2, 'the new song:loaded must open its own socket');
+  assert.equal(
+    FakeWebSocket.instances.at(-1).url,
+    'wss://example.test/ws/highway/song-2.sloppak?arrangement=3',
+    'the socket must name the published song and its server-resolved arrangement'
+  );
 });
 
-test('the wrapped playSong does not touch the lyrics socket when the view is inactive', async () => {
-  const original = async () => 'ok';
+test('the lyrics socket encodes core\'s already-decoded filename exactly once', () => {
+  // Core hands over a decoded name (its own decodeURIComponent of the WS URL's
+  // path segment), so this one gets encoded once and never decoded — a space
+  // and a literal '%' are what a real filename can contain (core's
+  // playback-transport adapter calls out the '%' case specifically), and
+  // double-encoding or a re-decode would break the URL.
+  const feedBack = mockFeedBack({ filename: 'Song 50%.sloppak', arrangementIndex: 2 });
   const chordr = freshPlugin({
     addEventListener: () => {},
-    playSong: original,
-    highway: { getSongInfo: () => ({ filename: 'song.sloppak' }) },
+    playSong: async () => {},
+    highway: {},
+    feedBack,
   });
 
-  const { viewState } = chordr._internal;
-  viewState.active = false;
-  viewState.ws = null;
+  chordr._internal.startView();
 
-  const result = await global.window.playSong();
-
-  assert.equal(result, 'ok');
-  assert.equal(viewState.ws, null);
-  assert.equal(FakeWebSocket.instances.length, 0);
+  assert.equal(
+    FakeWebSocket.instances.at(-1).url,
+    'wss://example.test/ws/highway/Song%2050%25.sloppak?arrangement=2'
+  );
 });
 
-test('the wrapped playSong clears stale lyrics BEFORE awaiting the new song, not after', async () => {
+test('a closed view stops listening for song:loaded and does not accumulate listeners across toggles', async () => {
+  const feedBack = mockFeedBack({ filename: 'song-1.sloppak' });
+  const chordr = freshPlugin({
+    addEventListener: () => {},
+    playSong: async () => {},
+    highway: {},
+    feedBack,
+  });
+
+  chordr._internal.startView();
+  assert.equal(feedBack.listenerCount('song:loaded'), 1);
+
+  chordr._internal.stopView();
+  assert.equal(feedBack.listenerCount('song:loaded'), 0, 'a closed view must not keep listening');
+
+  const socketsWhileClosed = FakeWebSocket.instances.length;
+  corePublishSong(feedBack, { filename: 'song-2.sloppak' });
+  await flushAsync();
+  assert.equal(
+    FakeWebSocket.instances.length,
+    socketsWhileClosed,
+    'a song loading with the view closed must not open a lyrics socket'
+  );
+
+  chordr._internal.startView();
+  assert.equal(feedBack.listenerCount('song:loaded'), 1, 'reopening must subscribe once, not once per toggle');
+});
+
+test('the wrapped playSong clears stale lyrics BEFORE the new song has loaded, not after', async () => {
   let resolveOriginal;
   const original = () => new Promise((resolve) => { resolveOriginal = resolve; });
+  const feedBack = mockFeedBack({ filename: 'song-1.sloppak', arrangementIndex: 0 });
 
   const chordr = freshPlugin({
     addEventListener: () => {},
     playSong: original,
-    highway: { getSongInfo: () => ({ filename: 'song-2.sloppak' }) },
+    highway: {},
+    feedBack,
   });
 
   const { viewState } = chordr._internal;
-  const staleSocket = new FakeWebSocket('wss://example.test/stale');
-  viewState.active = true;
-  viewState.ws = staleSocket;
+  chordr._internal.startView();
+  const staleSocket = FakeWebSocket.instances.at(-1);
   viewState.lyricLines = [{ startT: 0, endT: 1, words: [] }];
 
   const playSongPromise = global.window.playSong();
+  await flushAsync();
 
-  // The new song's load hasn't resolved yet (original() is still
-  // pending) — stale state must already be cleared so the overlay
-  // doesn't keep showing the previous song's lyrics during the load.
+  // The new song's load hasn't resolved yet (original() is still pending) —
+  // stale state must already be cleared so the overlay doesn't keep showing
+  // the previous song's lyrics during a load that can take seconds.
   assert.equal(staleSocket.closed, true, 'stale socket must close before the new song finishes loading');
   assert.deepEqual(viewState.lyricLines, [], 'stale lyrics must clear before the new song finishes loading');
-  assert.equal(FakeWebSocket.instances.length, 1, 'must not reconnect until the new song has actually loaded');
+  assert.equal(FakeWebSocket.instances.length, 1, 'must not open another socket while the new song is still loading');
 
   resolveOriginal('done');
   await playSongPromise;
+  assert.equal(FakeWebSocket.instances.length, 1, 'still nothing to reconnect to until core publishes the new song');
 
-  assert.equal(FakeWebSocket.instances.length, 2, 'reconnects once the new song has loaded');
+  corePublishSong(feedBack, { filename: 'song-2.sloppak', arrangementIndex: 0 });
+  await flushAsync();
+  assert.equal(
+    FakeWebSocket.instances.at(-1).url,
+    'wss://example.test/ws/highway/song-2.sloppak?arrangement=0'
+  );
 });
 
 // ── _startView retries the playSong wrap (install-order race) ───────
