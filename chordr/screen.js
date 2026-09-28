@@ -70,7 +70,7 @@ if (!window[`__${PLUGIN_ID}_installed`]) {
   // OFFSETS from standard (not absolute pitch) — see lib/song.py's
   // pitch_from_base, which this mirrors. Returns null when `string` has no
   // tuning/base entry.
-  function pitchFromBase(base, capo, tuning, string, fret) {
+  const pitchFromBase = (base, capo, tuning, string, fret) => {
     // Number.isInteger(NaN) is false, so a caller passing an undefined/
     // malformed string or fret (e.g. reading the wrong property name off a
     // note object) is rejected here explicitly, rather than `string < 0 ||
@@ -81,9 +81,9 @@ if (!window[`__${PLUGIN_ID}_installed`]) {
         string < 0 || string >= tuning.length || !Number.isFinite(fret)) {
       return null;
     }
-    const root = string < base.length ? base[string] : base[base.length - 1];
-    return root + Number(tuning[string] || 0) + Number(capo || 0) + fret;
-  }
+    const root = string < base.length ? base.at(string) : base.at(-1);
+    return root + Number(tuning.at(string) || 0) + Number(capo || 0) + fret;
+  };
 
   function noteName(pitchClass, useFlats) {
     const names = useFlats ? NOTE_NAMES_FLAT : NOTE_NAMES_SHARP;
