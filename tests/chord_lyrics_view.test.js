@@ -320,9 +320,8 @@ test('the wrapped playSong resets lyrics state and opens a new lyrics socket whe
   const chordr = freshPlugin({
     addEventListener: () => {},
     playSong: original,
-    highway: {
-      getSongInfo: () => ({ filename: 'song-2.sloppak', arrangement_index: 0 }),
-    },
+    highway: {},
+    feedBack: { currentSong: { filename: 'song-2.sloppak', arrangementIndex: 0 } },
   });
 
   const { viewState } = chordr._internal;
@@ -347,7 +346,8 @@ test('the wrapped playSong does not touch the lyrics socket when the view is ina
   const chordr = freshPlugin({
     addEventListener: () => {},
     playSong: original,
-    highway: { getSongInfo: () => ({ filename: 'song.sloppak' }) },
+    highway: {},
+    feedBack: { currentSong: { filename: 'song.sloppak' } },
   });
 
   const { viewState } = chordr._internal;
@@ -368,7 +368,8 @@ test('the wrapped playSong clears stale lyrics BEFORE awaiting the new song, not
   const chordr = freshPlugin({
     addEventListener: () => {},
     playSong: original,
-    highway: { getSongInfo: () => ({ filename: 'song-2.sloppak' }) },
+    highway: {},
+    feedBack: { currentSong: { filename: 'song-2.sloppak' } },
   });
 
   const { viewState } = chordr._internal;

@@ -695,12 +695,19 @@ if (!window[`__${PLUGIN_ID}_installed`]) {
   };
 
   const _connectLyricsSocket = (highway) => {
-    const songInfo = highway.getSongInfo ? highway.getSongInfo() : null;
-    if (!songInfo || !songInfo.filename || typeof WebSocket === "undefined") return;
+    // The real `song_info` WebSocket payload carries no `filename` field at
+    // all (tuning/stringCount/capo/arrangement/audio_url/... — see core
+    // CLAUDE.md's WS protocol reference), so `highway.getSongInfo().filename`
+    // is always undefined on a real host and this guard never opened a
+    // socket. `window.feedBack.currentSong` is core's own copy, derived from
+    // the WS URL itself (already decoded) rather than the song_info payload
+    // — the same source the audio-detection path already keys its cache on
+    // via `songInfo.audio_url` for the same underlying reason.
+    const currentSong = window.feedBack && window.feedBack.currentSong;
+    if (!currentSong || !currentSong.filename || typeof WebSocket === "undefined") return;
 
-    let name = songInfo.filename;
-    try { name = decodeURIComponent(name); } catch (_) { /* already decoded */ }
-    const arrIndex = songInfo.arrangement_index || 0;
+    const name = currentSong.filename;
+    const arrIndex = currentSong.arrangementIndex || 0;
     const scheme = location.protocol === "https:" ? "wss" : "ws";
     const url = `${scheme}://${location.host}/ws/highway/${encodeURIComponent(name)}?arrangement=${arrIndex}`;
 
