@@ -399,7 +399,10 @@ if (!window[`__${PLUGIN_ID}_installed`]) {
     }
   }
 
-  function _registerChartTransform() {
+  // async/await (rather than chained/nested .then()) keeps this linear:
+  // register -> inspect -> maybe select, each step checked against its own
+  // resolved status before the next one runs.
+  async function _registerChartTransform() {
     const api = window.feedBack && window.feedBack.capabilities;
     if (!api || typeof api.dispatch !== "function") {
       _warnChartTransformUnavailable("no capabilities API on this host");
@@ -409,63 +412,63 @@ if (!window[`__${PLUGIN_ID}_installed`]) {
     window[`__${PLUGIN_ID}_transformRegistered`] = true;
 
     const providerId = `${PLUGIN_ID}_diagrams`;
-    api.dispatch({
-      capability: "chart-transform",
-      command: "register-provider",
-      source: providerId,
-      payload: {
-        providerId,
-        label: "Chordr — auto-generated chord diagrams",
-        transform(input) {
-          try {
-            return _transformInput(input || {});
-          } catch (_) {
-            return null; // never let a bad chord shape break rendering
-          }
+    try {
+      const registerResult = await api.dispatch({
+        capability: "chart-transform",
+        command: "register-provider",
+        source: providerId,
+        payload: {
+          providerId,
+          label: "Chordr — auto-generated chord diagrams",
+          transform(input) {
+            try {
+              return _transformInput(input || {});
+            } catch (_) {
+              return null; // never let a bad chord shape break rendering
+            }
+          },
         },
-      },
-    }).then((registerResult) => {
+      });
       if (!_isAppliedStatus(registerResult)) {
         _warnChartTransformUnavailable(`register-provider: ${(registerResult && registerResult.status) || "no response"}`);
         return;
       }
-      return api.dispatch({ capability: "chart-transform", command: "inspect", source: providerId })
-        .then((inspectResult) => {
-          if (!_isAppliedStatus(inspectResult)) {
-            _warnChartTransformUnavailable(`inspect: ${(inspectResult && inspectResult.status) || "no response"}`);
-            return;
-          }
-          const snapshot = (inspectResult && (inspectResult.payload || inspectResult)) || {};
-          if (snapshot.active === providerId) {
-            _chartTransformStatus = "active";
-            return;
-          }
-          if (snapshot.active) {
-            // Never steal an existing selection — only self-select as a
-            // sensible default when nothing is active yet (mirrors how
-            // register-provider itself only auto-restores a persisted
-            // selection for THIS exact provider id, never forces one).
-            // Another provider already holds it; registered but not live.
-            _chartTransformStatus = "registered";
-            return;
-          }
-          return api.dispatch({
-            capability: "chart-transform", command: "select-provider",
-            source: providerId, payload: { providerId },
-          }).then((selectResult) => {
-            if (_isAppliedStatus(selectResult)) {
-              _chartTransformStatus = "active";
-            } else {
-              // Registration itself succeeded — only the self-select
-              // step failed, which is not a host-compatibility gap, so
-              // this doesn't warn the way an unavailable capability does.
-              _chartTransformStatus = "registered";
-            }
-          });
-        });
-    }).catch(() => {
+
+      const inspectResult = await api.dispatch({ capability: "chart-transform", command: "inspect", source: providerId });
+      if (!_isAppliedStatus(inspectResult)) {
+        _warnChartTransformUnavailable(`inspect: ${(inspectResult && inspectResult.status) || "no response"}`);
+        return;
+      }
+      const snapshot = (inspectResult && (inspectResult.payload || inspectResult)) || {};
+      if (snapshot.active === providerId) {
+        _chartTransformStatus = "active";
+        return;
+      }
+      if (snapshot.active) {
+        // Another provider already holds the selection — registered but
+        // not live. Never steal an existing selection; only self-select
+        // as a sensible default when nothing is active yet (mirrors how
+        // register-provider itself only auto-restores a persisted
+        // selection for THIS exact provider id, never forces one).
+        _chartTransformStatus = "registered";
+        return;
+      }
+
+      const selectResult = await api.dispatch({
+        capability: "chart-transform", command: "select-provider",
+        source: providerId, payload: { providerId },
+      });
+      if (_isAppliedStatus(selectResult)) {
+        _chartTransformStatus = "active";
+      } else {
+        // Registration itself succeeded — only the self-select step
+        // failed, which is not a host-compatibility gap, so this doesn't
+        // warn the way an unavailable capability does.
+        _chartTransformStatus = "registered";
+      }
+    } catch (_) {
       _warnChartTransformUnavailable("dispatch threw unexpectedly");
-    });
+    }
   }
 
   if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
