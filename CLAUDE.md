@@ -30,7 +30,7 @@ capability's presence at call time (`getattr(app.state,
 handle its absence: `difficulty_ladder` returns HTTP 503 (see above),
 `feedpakr` degrades to a warning and no-ops rather than failing the
 build. This plugin's `plugin.json` is
-currently at `0.5.1`; the chart-transform block has been declared in its
+currently at `0.5.2`; the chart-transform block has been declared in its
 current canonical shape since `0.2.0` (commit `084e1b2`). If you change
 what `chart-transform`/`analyze_chart_chords_v1` returns or how it's
 registered, both of those repos' consuming code needs to be checked, not
@@ -48,6 +48,16 @@ registered providers before the chart reaches renderers. See
 `../feedBack/docs/capability-recipes.md#chart-transform-provider` for the
 registration contract this manifest block and `routes.py` implement
 against.
+
+`_registerChartTransform()` in `screen.js` checks the resolved `status` of
+each `dispatch()` call rather than only its resolve/reject outcome — core's
+`static/capabilities.js` `dispatch()` resolves on failure (e.g.
+`{status: 'no-owner'}` when nothing owns the capability), it does not
+reject — and exposes the result via `window.chordr.getChartTransformStatus()`
+(`"pending"` / `"active"` / `"registered"` / `"unavailable"`; see README's
+Host compatibility section and chordr#21/#24). Any change to this
+registration flow should preserve that status-checking, not just the
+resolve/reject shape.
 
 ## The Node subprocess bridge (`analyze_cli.js`)
 

@@ -53,6 +53,7 @@ window.chordr.generateChordTemplates(chords, existingTemplates, {
   stringCount,
   isBass,
 });
+window.chordr.getChartTransformStatus(); // "pending" | "active" | "registered" | "unavailable"
 ```
 
 `identifyChord` accepts the real chart wire shape `[{ s, f }, ...]` and also
@@ -116,10 +117,21 @@ diagram enrichment:
 
 On a host below the enrichment floor, the plugin does **not** silently
 appear fully functional: `_registerChartTransform()` logs a `console.warn`
-and `window.chordr.getChartTransformStatus()` returns `"unavailable"`
-(`"active"` once the provider is confirmed registered and selected,
-`"pending"` before that resolves). Analysis-only consumers are unaffected
-either way.
+and `window.chordr.getChartTransformStatus()` returns one of four states
+(checked against each dispatch's resolved `status` — core's capability
+dispatch *resolves* on failure, e.g. `{status: 'no-owner'}` when nothing
+owns the capability at all, rather than rejecting, so "the promise chain
+completed" is not by itself evidence of success):
+
+| Status | Meaning |
+| --- | --- |
+| `"pending"` | Registration hasn't resolved yet |
+| `"active"` | Registered **and** currently the selected provider — diagrams are reaching `highway.getChordTemplates()` |
+| `"registered"` | Registered successfully, but a different provider currently holds the selection (expected under `ownership: "multi-provider"`) — this provider's diagrams are not live, but this is not a host-compatibility gap and does not log a warning |
+| `"unavailable"` | No capabilities API on this host, or `register-provider`/`inspect`/`select-provider` resolved with a non-success status — logs a `console.warn` naming which step failed |
+
+Analysis-only consumers (`window.chordr.*` outside this accessor, the
+chord/lyrics view, audio detection) are unaffected by any of these states.
 
 The known lyrics-view filename-resolution bug (`_connectLyricsSocket`
 guarding on the nonexistent `songInfo.filename`) is a separate, tracked
