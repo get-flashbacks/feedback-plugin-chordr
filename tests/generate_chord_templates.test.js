@@ -139,35 +139,30 @@ test('does not select itself, and reports "registered", when another provider is
     });
 });
 
-test('getChartTransformStatus is "unavailable" (with a console.warn) when window.feedBack.capabilities has no dispatch', () => {
+test('getChartTransformStatus is "unavailable" (with a console.warn) when window.feedBack.capabilities has no dispatch', (t) => {
     // window.feedBack.capabilities being present (but non-functional) is what
     // makes _registerChartTransform() run synchronously at load instead of
     // waiting on the 'feedBack:capabilities:ready' event (a host with no
     // window.feedBack.capabilities at all never fires that event, so this
     // is the reachable "unavailable" case, not an untested one).
-    const warnings = [];
-    const originalWarn = console.warn;
-    console.warn = (msg) => warnings.push(msg);
-    try {
-        const chordr = freshPlugin({
-            feedBack: { capabilities: {} },
-            addEventListener: () => {},
-        });
-        assert.equal(chordr.getChartTransformStatus(), 'unavailable');
-        assert.equal(warnings.length, 1, 'expected exactly one console.warn');
-    } finally {
-        console.warn = originalWarn;
-    }
+    // t.mock.method restores console.warn automatically at test end (even
+    // on failure), rather than a manual reassign/restore that leaks state
+    // across tests if an assertion throws first.
+    const warn = t.mock.method(console, 'warn', () => {});
+    const chordr = freshPlugin({
+        feedBack: { capabilities: {} },
+        addEventListener: () => {},
+    });
+    assert.equal(chordr.getChartTransformStatus(), 'unavailable');
+    assert.equal(warn.mock.callCount(), 1, 'expected exactly one console.warn');
 });
 
-test('getChartTransformStatus is "unavailable", not "active", when dispatch resolves {status:"no-owner"}', () => {
+test('getChartTransformStatus is "unavailable", not "active", when dispatch resolves {status:"no-owner"}', (t) => {
     // Reproduces the pre-fix bug: a host with the capabilities framework
     // but no chart-transform owner registered (everything before core
     // 05be9eb) resolves every dispatch with a failure status rather than
     // rejecting the promise.
-    const warnings = [];
-    const originalWarn = console.warn;
-    console.warn = (msg) => warnings.push(msg);
+    const warn = t.mock.method(console, 'warn', () => {});
     const capabilities = {
         dispatch() {
             return Promise.resolve({ status: 'no-owner' });
@@ -179,8 +174,6 @@ test('getChartTransformStatus is "unavailable", not "active", when dispatch reso
     });
     return settle().then(() => {
         assert.equal(chordr.getChartTransformStatus(), 'unavailable');
-        assert.ok(warnings.length >= 1, 'expected at least one console.warn');
-    }).finally(() => {
-        console.warn = originalWarn;
+        assert.ok(warn.mock.callCount() >= 1, 'expected at least one console.warn');
     });
 });
