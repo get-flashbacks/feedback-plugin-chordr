@@ -82,25 +82,20 @@ before assuming a given host can run it.
   to a single number without checking #21/#102's current state — the
   fix needs to distinguish analysis-only operation from automatic
   enrichment, not just pick one version.
-- **A known lyrics-view filename-resolution bug exists** (referenced in
+- **The lyrics-view filename-resolution bug is fixed** (was referenced in
   the last line of issue #21's body: "the known lyrics-view filename bug
-  is separate and cannot be fixed by raising minHost"; #21 is still open).
-  The root cause is in this repo: `_connectLyricsSocket`
-  (`chordr/screen.js:593-595`) bails out with `if (!songInfo ||
-  !songInfo.filename || ...) return;`, but the real `song_info` WebSocket
-  payload carries no `filename` field at all (it has `tuning`,
-  `stringCount`, `capo`, `arrangement`, `audio_url`, etc.) — so the guard
-  is always true and the lyrics socket never opens against a real host.
-  The audio-detection path a few lines down already works around this by
-  keying its cache on `songInfo.audio_url` instead (`chordr/screen.js:646`,
-  with a comment noting exactly this). The fix is to use the same
-  `audio_url`-keyed approach, or `window.feedBack.currentSong.filename`
-  (derived by core from the WS URL), not `songInfo.filename`. The unit
-  tests don't catch this because they mock `getSongInfo` to return a
-  `filename` field the real host never sends. If you're asked to raise
-  `minHost` as a fix for a chord/lyrics overlay bug report, check whether
-  it's actually this pre-existing, separately-tracked issue first — a
-  version bump won't fix it.
+  is separate and cannot be fixed by raising minHost"). Root cause:
+  `_connectLyricsSocket` bailed with `if (!songInfo || !songInfo.filename
+  || ...) return;`, but the real `song_info` WebSocket payload carries no
+  `filename` field at all (it has `tuning`, `stringCount`, `capo`,
+  `arrangement`, `audio_url`, etc.) — so the guard was always true and the
+  lyrics socket never opened against a real host. Fixed by switching to
+  `window.feedBack.currentSong.filename`/`.arrangementIndex` (core's own
+  copy, derived from the WS URL) — the same approach the audio-detection
+  path already used (keying its cache on `songInfo.audio_url` instead) for
+  the identical reason. If a future chord/lyrics overlay bug report looks
+  similar, check it's not a regression of this fix before assuming it's a
+  new issue or a `minHost` problem.
 
 ## Testing
 

@@ -26,6 +26,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The chord/lyrics view (chordr#3) now actually opens its lyrics WebSocket
+  on a real host. `_connectLyricsSocket` guarded on
+  `highway.getSongInfo().filename`, but the real `song_info` WS payload
+  never carries a `filename` field, so the guard was always true and the
+  socket never opened — the view silently never showed lyrics. Switched
+  to `window.feedBack.currentSong.filename`/`.arrangementIndex` (core's
+  own copy, derived from the WS URL), the same fix already applied to the
+  audio-detection path for the identical reason. Known, tracked
+  separately from #21 — raising `minHost` never fixed this.
 - Chord identification on piano/keys arrangements no longer misreads their
   MIDI-bucket-encoded `{s, f}` wire notes as guitar string+fret positions.
   Piano/keys arrangements (detected the same way `feedBack-plugin-piano`
