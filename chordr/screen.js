@@ -358,14 +358,75 @@ if (!window[`__${PLUGIN_ID}_installed`]) {
     return merged ? { chordTemplates: merged } : null;
   }
 
-  function _registerChartTransform() {
-    const api = window.feedBack && window.feedBack.capabilities;
-    if (!api || typeof api.dispatch !== "function") return;
-    if (window[`__${PLUGIN_ID}_transformRegistered`]) return;
-    window[`__${PLUGIN_ID}_transformRegistered`] = true;
+  // chordr#21 — automatic chart-transform enrichment (auto-generated chord
+  // diagrams) needs a core build with the chart-transform capability
+  // (feedBack#952, core commit 05be9eb+); analysis-only use of
+  // window.chordr/the server callable does not. dispatch() RESOLVES on
+  // failure (e.g. {status:'no-owner'} when no owner is registered for the
+  // capability at all) rather than rejecting — core's capabilities.js
+  // only rejects on a genuinely unexpected exception — so every dispatch
+  // below must be checked against its resolved `status`, not just whether
+  // the promise chain completed. _chartTransformStatus makes the outcome
+  // introspectable (README's Host compatibility section documents this).
+  // Written once at registration time and never revisited afterward — it
+  // reflects how registration/selection resolved, NOT live per-song
+  // rendering (core stages the transform onto highway surfaces lazily, on
+  // song:ready/highway:created, and Chordr's own transform can legitimately
+  // return null for a chord it doesn't need to enrich) — a later
+  // clear-provider or a transform that throws on every chart still reads
+  // whatever this resolved to:
+  //   "pending"    — registration hasn't resolved yet (also the permanent
+  //                  value on a core with no capabilities framework at
+  //                  all — see the no-dispatch guard below)
+  //   "active"     — core's chart-transform coordinator currently selects
+  //                  THIS provider; not proof any diagram has rendered
+  //   "registered" — registered successfully, but not currently selected
+  //                  (a different provider holds the selection, or this
+  //                  provider's own self-select attempt didn't resolve
+  //                  successfully) — this provider's diagrams are not live
+  //   "unavailable"— register-provider/inspect/select-provider resolved
+  //                  with a non-success status (framework present, no
+  //                  chart-transform owner registered for it)
+  let _chartTransformStatus = "pending";
 
-    const providerId = `${PLUGIN_ID}_diagrams`;
-    api.dispatch({
+  // Dispatch result shape from core's static/capabilities.js `dispatch()`.
+  // @typedef {{ status: string, payload?: { active?: string } }} DispatchResult
+  //
+  // "applied"/"overridden" are the only success statuses _dispatchStatus()
+  // can produce; everything else (no-owner, no-handler, unsupported-command,
+  // incompatible-version, error, ...) means the command did not do what it
+  // asked for, even though the promise resolved rather than rejected.
+  // const arrow functions, not function declarations nested in this file's
+  // top-level `if` block — matches this repo's existing convention for
+  // avoiding block-scoped function-declaration hoisting risk (see
+  // midiFromPianoNote / _getArrangementContext / _shapeFromChordNotes above).
+  const _isAppliedStatus = (/** @type {DispatchResult} */ result) => {
+    const status = result && result.status;
+    return status === "applied" || status === "overridden";
+  };
+
+  const _describeStatus = (/** @type {DispatchResult} */ result) => (result && result.status) || "no response";
+
+  const _warnChartTransformUnavailable = (reason) => {
+    _chartTransformStatus = "unavailable";
+    if (typeof console !== "undefined") {
+      console.warn(
+        `[${PLUGIN_ID}] chart-transform unavailable (${reason}) — ` +
+        "auto-generated chord diagrams are disabled (analysis via window.chordr " +
+        "still works). Needs feedBack core 05be9eb+ (see chordr#21)."
+      );
+    }
+  };
+
+  const providerId = `${PLUGIN_ID}_diagrams`;
+
+  // Linear register -> inspect -> maybe select-provider flow. async/await
+  // here (rather than chained .then()s) keeps each step's status check
+  // adjacent to the call it checks; the caller below stays a plain
+  // function so this async function's own rejection can't reach
+  // addEventListener's listener machinery unhandled.
+  const _tryRegisterChartTransform = async (api) => {
+    const registerResult = await api.dispatch({
       capability: "chart-transform",
       command: "register-provider",
       source: providerId,
@@ -380,22 +441,65 @@ if (!window[`__${PLUGIN_ID}_installed`]) {
           }
         },
       },
-    }).then(() => api.dispatch({ capability: "chart-transform", command: "inspect", source: providerId }))
-      .then((result) => {
-        // Never steal an existing selection — only self-select as a
-        // sensible default when nothing is active yet (mirrors how
-        // register-provider itself only auto-restores a persisted
-        // selection for THIS exact provider id, never forces one).
-        const snapshot = (result && (result.payload || result)) || {};
-        if (!snapshot.active) {
-          return api.dispatch({
-            capability: "chart-transform", command: "select-provider",
-            source: providerId, payload: { providerId },
-          });
-        }
-      })
-      .catch(() => { /* capability graph unavailable — diagrams just won't auto-generate */ });
-  }
+    });
+    if (!_isAppliedStatus(registerResult)) {
+      _warnChartTransformUnavailable(`register-provider: ${_describeStatus(registerResult)}`);
+      return;
+    }
+
+    const inspectResult = await api.dispatch({ capability: "chart-transform", command: "inspect", source: providerId });
+    if (!_isAppliedStatus(inspectResult)) {
+      _warnChartTransformUnavailable(`inspect: ${_describeStatus(inspectResult)}`);
+      return;
+    }
+    const snapshot = (inspectResult && (inspectResult.payload || inspectResult)) || {};
+    if (snapshot.active === providerId) {
+      _chartTransformStatus = "active";
+      return;
+    }
+    // Never steal an existing selection — only self-select as a sensible
+    // default when nothing is active yet (mirrors how register-provider
+    // itself only auto-restores a persisted selection for THIS exact
+    // provider id, never forces one).
+    if (snapshot.active) {
+      _chartTransformStatus = "registered"; // another provider holds the selection
+      return;
+    }
+
+    const selectResult = await api.dispatch({
+      capability: "chart-transform", command: "select-provider",
+      source: providerId, payload: { providerId },
+    });
+    // A non-success select (e.g. an unknown provider id) is not a
+    // host-compatibility gap — registration itself already succeeded — so
+    // this falls back to "registered" without warning, unlike the two
+    // checks above.
+    _chartTransformStatus = _isAppliedStatus(selectResult) ? "active" : "registered";
+  };
+
+  // Not async: passed directly to addEventListener below, and an async
+  // function there would leave its rejection unhandled by the listener
+  // machinery.
+  const _registerChartTransform = () => {
+    const api = window.feedBack && window.feedBack.capabilities;
+    // Defensive only: on a real feedBack build, capabilities.js publishes
+    // window.feedBack.capabilities and fires 'feedBack:capabilities:ready'
+    // in the same synchronous block, and v3/index.html loads it before the
+    // plugin scripts that would call this function — so this branch isn't
+    // actually reachable from the caller below, which instead just waits
+    // forever on an event a host with no capabilities framework never
+    // fires (status stays "pending", not "unavailable", on that tier).
+    if (!api || typeof api.dispatch !== "function") {
+      _warnChartTransformUnavailable("no capabilities API on this host");
+      return;
+    }
+    if (window[`__${PLUGIN_ID}_transformRegistered`]) return;
+    window[`__${PLUGIN_ID}_transformRegistered`] = true;
+
+    _tryRegisterChartTransform(api).catch(() => {
+      _warnChartTransformUnavailable("dispatch threw unexpectedly");
+    });
+  };
 
   if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
     if (window.feedBack && window.feedBack.capabilities) _registerChartTransform();
@@ -845,6 +949,20 @@ if (!window[`__${PLUGIN_ID}_installed`]) {
     KEYS_PATTERNS,
     getArrangementContext: _getArrangementContext,
     detectChordsFromAudio,
+    // chordr#21 — "pending" | "active" | "registered" | "unavailable".
+    // "active" means core's chart-transform coordinator currently selects
+    // THIS provider — not proof any diagram has actually rendered, since
+    // core stages the transform onto highway surfaces lazily and Chordr's
+    // own transform can return null for a chart it doesn't need to enrich.
+    // "registered" means installed but not currently selected (either a
+    // different provider holds the selection, or this provider's own
+    // self-select attempt didn't resolve successfully). Lets a caller
+    // distinguish either from "unavailable" instead of assuming enrichment
+    // is live just because window.chordr exists (analysis-only helpers
+    // work regardless of this status). See _registerChartTransform's own
+    // comment for the full state contract, including its one-time-at-load
+    // caveat.
+    getChartTransformStatus: () => _chartTransformStatus,
     // Not part of the public API (see README) — exposed only so
     // tests/chord_lyrics_view.test.js can drive the chord/lyrics view's
     // internals directly instead of standing up a full DOM + WebSocket +
