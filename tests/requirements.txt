@@ -1,0 +1,2 @@
+# Required to import the chart-analysis route tests.
+fastapi==0.141.1

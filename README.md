@@ -120,13 +120,9 @@ neighbors) into chord segments.
 ## Tests
 
 ```bash
-node tests/chord_analysis.test.js
-node tests/generate_chord_templates.test.js
-node tests/build_lyric_lines.test.js
-node tests/chord_lyrics_view.test.js
-node tests/group_chord_events.test.js
-python3 -m unittest tests/test_audio_chords.py
-python3 -m unittest tests/test_chart_bridge.py
+node --test tests/*.test.js
+python3 -m pip install -r tests/requirements.txt
+python3 -m unittest discover -s tests -p 'test_*.py'
 ```
 
 ## License
