@@ -383,12 +383,16 @@ if (!window[`__${PLUGIN_ID}_installed`]) {
   // (no-owner, no-handler, unsupported-command, incompatible-version,
   // error, ...) means the command did not do what it asked for, even
   // though the promise resolved rather than rejected.
-  function _isAppliedStatus(result) {
+  // const arrow function, not a function declaration nested in this file's
+  // top-level `if` block — matches this repo's existing convention for
+  // avoiding block-scoped function-declaration hoisting risk (see
+  // midiFromPianoNote / _getArrangementContext / _shapeFromChordNotes above).
+  const _isAppliedStatus = (result) => {
     const status = result && result.status;
     return status === "applied" || status === "overridden";
-  }
+  };
 
-  function _warnChartTransformUnavailable(reason) {
+  const _warnChartTransformUnavailable = (reason) => {
     _chartTransformStatus = "unavailable";
     if (typeof console !== "undefined") {
       console.warn(
@@ -397,12 +401,14 @@ if (!window[`__${PLUGIN_ID}_installed`]) {
         "still works). Needs feedBack core 05be9eb+ (see chordr#21)."
       );
     }
-  }
+  };
 
-  // async/await (rather than chained/nested .then()) keeps this linear:
-  // register -> inspect -> maybe select, each step checked against its own
-  // resolved status before the next one runs.
-  async function _registerChartTransform() {
+  // Not async: passed directly to addEventListener below, and an async
+  // function there would leave its rejection unhandled by the listener
+  // machinery. Every dispatch() call already has its own .then/.catch, so
+  // this stays a plain function returning undefined, matching what
+  // addEventListener expects.
+  const _registerChartTransform = () => {
     const api = window.feedBack && window.feedBack.capabilities;
     if (!api || typeof api.dispatch !== "function") {
       _warnChartTransformUnavailable("no capabilities API on this host");
@@ -412,29 +418,29 @@ if (!window[`__${PLUGIN_ID}_installed`]) {
     window[`__${PLUGIN_ID}_transformRegistered`] = true;
 
     const providerId = `${PLUGIN_ID}_diagrams`;
-    try {
-      const registerResult = await api.dispatch({
-        capability: "chart-transform",
-        command: "register-provider",
-        source: providerId,
-        payload: {
-          providerId,
-          label: "Chordr — auto-generated chord diagrams",
-          transform(input) {
-            try {
-              return _transformInput(input || {});
-            } catch (_) {
-              return null; // never let a bad chord shape break rendering
-            }
-          },
+    api.dispatch({
+      capability: "chart-transform",
+      command: "register-provider",
+      source: providerId,
+      payload: {
+        providerId,
+        label: "Chordr — auto-generated chord diagrams",
+        transform(input) {
+          try {
+            return _transformInput(input || {});
+          } catch (_) {
+            return null; // never let a bad chord shape break rendering
+          }
         },
-      });
+      },
+    }).then((registerResult) => {
       if (!_isAppliedStatus(registerResult)) {
         _warnChartTransformUnavailable(`register-provider: ${(registerResult && registerResult.status) || "no response"}`);
-        return;
+        return null;
       }
-
-      const inspectResult = await api.dispatch({ capability: "chart-transform", command: "inspect", source: providerId });
+      return api.dispatch({ capability: "chart-transform", command: "inspect", source: providerId });
+    }).then((inspectResult) => {
+      if (inspectResult === null) return; // register-provider already failed above
       if (!_isAppliedStatus(inspectResult)) {
         _warnChartTransformUnavailable(`inspect: ${(inspectResult && inspectResult.status) || "no response"}`);
         return;
@@ -453,23 +459,23 @@ if (!window[`__${PLUGIN_ID}_installed`]) {
         _chartTransformStatus = "registered";
         return;
       }
-
-      const selectResult = await api.dispatch({
+      return api.dispatch({
         capability: "chart-transform", command: "select-provider",
         source: providerId, payload: { providerId },
+      }).then((selectResult) => {
+        if (_isAppliedStatus(selectResult)) {
+          _chartTransformStatus = "active";
+        } else {
+          // Registration itself succeeded — only the self-select step
+          // failed, which is not a host-compatibility gap, so this
+          // doesn't warn the way an unavailable capability does.
+          _chartTransformStatus = "registered";
+        }
       });
-      if (_isAppliedStatus(selectResult)) {
-        _chartTransformStatus = "active";
-      } else {
-        // Registration itself succeeded — only the self-select step
-        // failed, which is not a host-compatibility gap, so this doesn't
-        // warn the way an unavailable capability does.
-        _chartTransformStatus = "registered";
-      }
-    } catch (_) {
+    }).catch(() => {
       _warnChartTransformUnavailable("dispatch threw unexpectedly");
-    }
-  }
+    });
+  };
 
   if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
     if (window.feedBack && window.feedBack.capabilities) _registerChartTransform();
