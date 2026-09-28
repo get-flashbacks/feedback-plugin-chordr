@@ -96,7 +96,7 @@ before assuming a given host can run it.
 
 ```bash
 node --test tests/*.test.js                                             # 78 pass
-python3 -m unittest tests/test_audio_chords.py tests/test_chart_bridge.py  # 18 pass
+python3 -m pip install -r tests/requirements.txt\npython3 -m unittest discover -s tests -p 'test_*.py'                # 18 pass
 ```
 
 The JS suite has no third-party dependencies. `test_chart_bridge.py`
