@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `window.chordr.getChartTransformStatus()` reports whether automatic
+  chord-diagram enrichment (the `chart-transform` provider) is actually
+  active on the current host (`"pending"` / `"active"` / `"unavailable"`),
+  and a `console.warn` fires when it can't register — instead of silently
+  degrading and looking fully enabled on a host below the enrichment floor.
+  README documents the resulting two-tier host-compatibility requirement
+  (analysis-only vs. automatic enrichment). (#21)
+
 ### Fixed
 
 - Chord identification on piano/keys arrangements no longer misreads their

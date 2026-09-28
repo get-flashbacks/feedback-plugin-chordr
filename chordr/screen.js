@@ -358,9 +358,29 @@ if (!window[`__${PLUGIN_ID}_installed`]) {
     return merged ? { chordTemplates: merged } : null;
   }
 
+  // chordr#21 — automatic chart-transform enrichment (auto-generated chord
+  // diagrams) needs a core build with the chart-transform capability
+  // (feedBack#952, core commit 05be9eb+); analysis-only use of
+  // window.chordr/the server callable does not. On a host without it,
+  // registration below silently no-ops rather than throwing — which used
+  // to mean the plugin looked fully enabled with no signal that diagrams
+  // just won't auto-generate. _chartTransformStatus makes that state
+  // introspectable (README's Host compatibility section documents this).
+  let _chartTransformStatus = "pending"; // "pending" | "active" | "unavailable"
+
   function _registerChartTransform() {
     const api = window.feedBack && window.feedBack.capabilities;
-    if (!api || typeof api.dispatch !== "function") return;
+    if (!api || typeof api.dispatch !== "function") {
+      _chartTransformStatus = "unavailable";
+      if (typeof console !== "undefined") {
+        console.warn(
+          `[${PLUGIN_ID}] chart-transform capability not found on this host — ` +
+          "auto-generated chord diagrams are disabled (analysis via window.chordr " +
+          "still works). Needs feedBack core 05be9eb+ (see chordr#21)."
+        );
+      }
+      return;
+    }
     if (window[`__${PLUGIN_ID}_transformRegistered`]) return;
     window[`__${PLUGIN_ID}_transformRegistered`] = true;
 
@@ -394,7 +414,18 @@ if (!window[`__${PLUGIN_ID}_installed`]) {
           });
         }
       })
-      .catch(() => { /* capability graph unavailable — diagrams just won't auto-generate */ });
+      .then(() => { _chartTransformStatus = "active"; })
+      .catch(() => {
+        // capability graph rejected registration — diagrams won't auto-generate
+        _chartTransformStatus = "unavailable";
+        if (typeof console !== "undefined") {
+          console.warn(
+            `[${PLUGIN_ID}] chart-transform provider registration failed — ` +
+            "auto-generated chord diagrams are disabled (analysis via window.chordr " +
+            "still works). See chordr#21."
+          );
+        }
+      });
   }
 
   if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
@@ -845,6 +876,11 @@ if (!window[`__${PLUGIN_ID}_installed`]) {
     KEYS_PATTERNS,
     getArrangementContext: _getArrangementContext,
     detectChordsFromAudio,
+    // chordr#21 — "pending" | "active" | "unavailable". Lets a caller ask
+    // whether auto-generated chord diagrams are actually reaching the
+    // highway on this host, instead of assuming enrichment is live just
+    // because window.chordr exists (analysis-only helpers work regardless).
+    getChartTransformStatus: () => _chartTransformStatus,
     // Not part of the public API (see README) — exposed only so
     // tests/chord_lyrics_view.test.js can drive the chord/lyrics view's
     // internals directly instead of standing up a full DOM + WebSocket +

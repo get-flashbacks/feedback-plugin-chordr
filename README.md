@@ -101,6 +101,30 @@ has no chords for that song, same as a chart with none). The chord/lyrics
 view calls it automatically as a fallback; exposed for any other
 lyrics/chord-consuming plugin that wants the same source.
 
+## Host compatibility
+
+`plugin.json`'s `minHost` (`1.0.0`) is a placeholder, not a tested floor —
+see [chordr#21](https://github.com/get-flashbacks/feedback-plugin-chordr/issues/21).
+Chordr has two tiers of host dependency, and a host that only satisfies the
+first still loads the plugin and works for everything except automatic
+diagram enrichment:
+
+| Tier | What it needs | Requirement |
+| --- | --- | --- |
+| **Analysis-only** — `window.chordr.*` helpers, the chord/lyrics view, audio-based detection, the server `chordr_analyze_chart_chords_v1(...)` callable | `context.load_sibling` (backend), plugin CSS + highway chart getters (frontend), Node.js ≥ 16.6 on the host for server-side chord analysis | Works on any feedBack core that loads plugins at all |
+| **Automatic chart enrichment** — `chart-transform` provider registration so `highway.getChordTemplates()` picks up generated diagrams without any per-plugin integration | Core's chart-transform capability (feedBack#952) | Core commit [`05be9eb`](https://github.com/got-feedBack/feedBack/commit/05be9eb) or later — landed July 19, after the `v0.3.0-alpha.1` tag. No tagged core release has been audited against this yet; treat the commit hash as the floor until one is |
+
+On a host below the enrichment floor, the plugin does **not** silently
+appear fully functional: `_registerChartTransform()` logs a `console.warn`
+and `window.chordr.getChartTransformStatus()` returns `"unavailable"`
+(`"active"` once the provider is confirmed registered and selected,
+`"pending"` before that resolves). Analysis-only consumers are unaffected
+either way.
+
+The known lyrics-view filename-resolution bug (`_connectLyricsSocket`
+guarding on the nonexistent `songInfo.filename`) is a separate, tracked
+defect — raising `minHost` does not fix it. See `CLAUDE.md`.
+
 ## Server routes
 
 `POST /api/plugins/chordr/detect_chords` — body is the raw audio bytes
