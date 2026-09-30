@@ -20,7 +20,7 @@ updates:
     # Group eligible version updates after the major-version ignore above.
     # Security updates remain separate. This does not enable auto-merge.
     groups:
-      compatible-updates:
+      version-updates:
         patterns: ["*"]
 
   # Python dependencies declared in chordr/requirements.txt.
@@ -30,20 +30,18 @@ updates:
       interval: "monthly"
     open-pull-requests-limit: 5
     # requirements.txt here only has unbounded lower constraints
-    # (librosa>=0.10.1, etc.) and there's no lockfile — every newer
+    # and no lockfile — every newer
     # release already satisfies those, so "increase-if-necessary"
     # would never open a PR. "increase" always advances the floor
     # version instead, so scheduled checks actually do something.
     versioning-strategy: "increase"
-    # Major updates are excluded here and require manual maintenance.
+    # Preserve the major ignore for any exactly pinned requirements.
     ignore:
       - dependency-name: "*"
         update-types: ["version-update:semver-major"]
-    # Group eligible version updates after the major-version ignore above.
-    # Security updates remain separate. This does not enable auto-merge.
-    groups:
-      compatible-updates:
-        patterns: ["*"]
+    # Keep range-only Python updates as individual PRs for review.
+    # Without a resolved current version, semver-major ignores cannot
+    # reliably exclude major updates for these requirements.
 
 
   # FastAPI used by the Python chart-bridge tests.
@@ -58,5 +56,5 @@ updates:
     # Group eligible version updates after the major-version ignore above.
     # Security updates remain separate. This does not enable auto-merge.
     groups:
-      compatible-updates:
+      version-updates:
         patterns: ["*"]
