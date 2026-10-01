@@ -89,9 +89,15 @@ before assuming a given host can run it.
   while **automatic chart enrichment** needs core's chart-transform capability
   (feedBack#952), which landed in core commit `05be9eb` (2026-07-19, after the
   `v0.3.0-alpha.1` tag, which is core's only version tag).
-  `hostRequirements` is documentation-only: no host code path reads it. When a
-  tagged core release does identify a floor, add `minHost` back with that
-  version and update both docs. Node.js ≥ 16.6 is a separate requirement,
+  `hostRequirements` is documentation-only: no host code path reads it, and an
+  extra top-level manifest key is safe. Core's published schema
+  (`docs/plugin-manifest.schema.json`) sets top-level `additionalProperties:
+  true`; the loader validates only the `capabilities` block and reads every
+  other key through a fixed allowlist of `manifest.get(...)` calls (its own
+  bundled plugins ship `bundled`, which is likewise absent from the schema), so
+  an unrecognized key is ignored rather than rejected. When a tagged core
+  release does identify a floor, add `minHost` back with that version and
+  update both docs. Node.js ≥ 16.6 is a separate requirement,
   declared in `serverRequires` and enforced per-call in `routes.py`, not a core
   version concern.
 - **The lyrics-view filename-resolution bug is fixed** (was referenced in
