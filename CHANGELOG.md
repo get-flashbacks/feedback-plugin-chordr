@@ -23,6 +23,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   documents the resulting two-tier host-compatibility requirement
   (analysis-only vs. automatic enrichment) and the four-state status
   contract. (#21)
+- Expose conservative chord-event grouping in `window.chordr.groupChordEvents`
+  and a server-side analysis callable. Partial fret/string shapes remain
+  attached to the preceding full chord, including across successive partial
+  strums; unrelated or unknown shapes start a new group.
+- Auto-generate chord diagrams for chords whose chart data carries no
+  usable template (missing, or GP-import placeholder all `-1` frets) —
+  `window.chordr.generateChordTemplates()` derives a fret/string shape
+  from the chord's chart notes and a name via chord identification.
+  Registered as a `chart-transform` provider (feedBack#952) so any
+  renderer reading `highway.getChordTemplates()` picks up the generated
+  diagrams automatically. (#2)
+- Ultimate-Guitar-style chord/lyrics view: a player overlay ("🎤
+  Chords+Lyrics" in the v3 player control slot) showing the current
+  lyrics line with chord names positioned above the nearest word, and the
+  already-sung words highlighted. Adds `window.chordr.buildLyricLines()`
+  for parsing the `lyrics` WS message's `-`/`+` word-join/line-break
+  markers. (#3)
+- Audio-based chord detection: a fallback chord source for songs whose
+  chart has no note/chord data at all. New `POST
+  /api/plugins/chordr/detect_chords` route runs chroma-CQT + template
+  matching (`librosa`) on uploaded audio; the chord/lyrics view triggers
+  it automatically, client-side, only when the chart has no chords.
+  Adds `window.chordr.detectChordsFromAudio()`. (#5)
+
+### Changed
+
+- `minHost` is now unset in `plugin.json` instead of carrying the `1.0.0`
+  placeholder, which matched no real dependency (#21). Core reads the key and
+  passes it through to `/api/plugins` as `min_host` (passthrough in the
+  current release, enforcement deferred) and treats unset as a supported
+  value, so absent is the honest "no tested floor yet" state — a version
+  number here would be a guess. The requirement is recorded in a new
+  `hostRequirements` block, splitting the two tiers: **analysis-only**
+  operation — `window.chordr.*` helpers, the chord/lyrics view, audio
+  detection, the server `chordr_analyze_chart_chords_v1(...)` callable — has
+  no core version floor identified (it needs `context.load_sibling`, plugin
+  CSS, the highway chart getters and the `song:loaded` event, none yet tied to
+  a release, so it is untested rather than universally supported), while
+  **automatic chart enrichment** additionally needs core's `chart-transform`
+  capability (feedBack#952), which landed in core commit `05be9eb` (2026-07-19)
+  — after `v0.3.0-alpha.1`, core's only version tag. `hostRequirements` is
+  documentation-only (no host code path reads it); README's Host compatibility
+  section is the source of truth. Node.js ≥ 16.6 stays a separate requirement
+  in `serverRequires`. Add `minHost` back with a real version when a tagged
+  core release identifies the floor.
 
 ### Fixed
 
@@ -50,32 +95,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   does) now decode `midi = s*24 + f` directly, and auto-generated chord
   templates for them no longer write a nonsense guitar fret diagram. Fixes
   a bug where an unnamed C major piano voicing was auto-named "D". (#19)
-
-### Added
-
-- Expose conservative chord-event grouping in `window.chordr.groupChordEvents`
-  and a server-side analysis callable. Partial fret/string shapes remain
-  attached to the preceding full chord, including across successive partial
-  strums; unrelated or unknown shapes start a new group.
-
-- Auto-generate chord diagrams for chords whose chart data carries no
-  usable template (missing, or GP-import placeholder all `-1` frets) —
-  `window.chordr.generateChordTemplates()` derives a fret/string shape
-  from the chord's chart notes and a name via chord identification.
-  Registered as a `chart-transform` provider (feedBack#952) so any
-  renderer reading `highway.getChordTemplates()` picks up the generated
-  diagrams automatically. (#2)
-- Ultimate-Guitar-style chord/lyrics view: a player overlay ("🎤
-  Chords+Lyrics" in the v3 player control slot) showing the current
-  lyrics line with chord names positioned above the nearest word, and the
-  already-sung words highlighted. Adds `window.chordr.buildLyricLines()`
-  for parsing the `lyrics` WS message's `-`/`+` word-join/line-break
-  markers. (#3)
-- Audio-based chord detection: a fallback chord source for songs whose
-  chart has no note/chord data at all. New `POST
-  /api/plugins/chordr/detect_chords` route runs chroma-CQT + template
-  matching (`librosa`) on uploaded audio; the chord/lyrics view triggers
-  it automatically, client-side, only when the chart has no chords.
-  Adds `window.chordr.detectChordsFromAudio()`. (#5)
 
 <!-- Add entries under Added, Changed, Deprecated, Removed, Fixed, or Security as changes land. -->
