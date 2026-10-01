@@ -30,7 +30,7 @@ capability's presence at call time (`getattr(app.state,
 handle its absence: `difficulty_ladder` returns HTTP 503 (see above),
 `feedpakr` degrades to a warning and no-ops rather than failing the
 build. This plugin's `plugin.json` is
-currently at `0.5.3`; the chart-transform block has been declared in its
+currently at `0.5.4`; the chart-transform block has been declared in its
 current canonical shape since `0.2.0` (commit `084e1b2`). If you change
 what `chart-transform`/`analyze_chart_chords_v1` returns or how it's
 registered, both of those repos' consuming code needs to be checked, not
@@ -73,15 +73,27 @@ before assuming a given host can run it.
 
 ## Known issues worth knowing before touching related code
 
-- **`minHost: "1.0.0"` is a known-wrong placeholder** (issue #21) — it
-  doesn't reflect any real dependency. The org-wide compatibility audit
-  (`get-flashbacks/feedBack` issue #102) put the real floor for automatic
-  chart enrichment at core commit `05be9eb` (chart-transform capability
-  support); analysis-only helpers (`identifyChord`, etc., used standalone)
-  work on older hosts. Don't treat `1.0.0` as accurate, and don't "fix" it
-  to a single number without checking #21/#102's current state — the
-  fix needs to distinguish analysis-only operation from automatic
-  enrichment, not just pick one version.
+- **`minHost` is deliberately unset** (issue #21) — it used to carry a `1.0.0`
+  placeholder matching no real dependency. Core does read the key and pass it
+  through to `/api/plugins` as `min_host` (core's `plugins/__init__.py`:
+  "passthrough only in R0 — enforcement is deferred to R4"), and unset is
+  explicitly supported there, so absent means "no tested floor yet" — which is
+  the honest state. Don't fill it in with a guess. `plugin.json`'s
+  `hostRequirements` records the two tiers instead, and README's Host
+  compatibility section is the source of truth: **analysis-only** operation
+  (`window.chordr.*` helpers, the chord/lyrics view, audio detection, the
+  server callable) has no core version floor identified — it needs
+  `context.load_sibling`, plugin CSS, the highway chart getters, the
+  `song:loaded` event, and `window.feedBack.currentSong`, none of which has been
+  tied to a release, so it is untested rather than universally supported —
+  while **automatic chart enrichment** needs core's chart-transform capability
+  (feedBack#952), which landed in core commit `05be9eb` (2026-07-19, after the
+  `v0.3.0-alpha.1` tag, which is core's only version tag).
+  `hostRequirements` is documentation-only: no host code path reads it. When a
+  tagged core release does identify a floor, add `minHost` back with that
+  version and update both docs. Node.js ≥ 16.6 is a separate requirement,
+  declared in `serverRequires` and enforced per-call in `routes.py`, not a core
+  version concern.
 - **The lyrics-view filename-resolution bug is fixed** (was referenced in
   the last line of issue #21's body: "the known lyrics-view filename bug
   is separate and cannot be fixed by raising minHost"). Two defects, one

@@ -104,16 +104,22 @@ lyrics/chord-consuming plugin that wants the same source.
 
 ## Host compatibility
 
-`plugin.json`'s `minHost` (`1.0.0`) is a placeholder, not a tested floor —
-see [chordr#21](https://github.com/get-flashbacks/feedback-plugin-chordr/issues/21).
-Chordr has two tiers of host dependency, and a host that only satisfies the
-first still loads the plugin and works for everything except automatic
-diagram enrichment:
+`minHost` is deliberately unset in `plugin.json` (it was a `1.0.0` placeholder
+matching no real dependency — see [chordr#21](https://github.com/get-flashbacks/feedback-plugin-chordr/issues/21)).
+Core reads the key and passes it through to `/api/plugins` as `min_host`
+("passthrough only in R0 — enforcement is deferred to R4"), and unset is an
+explicitly supported state, so leaving it out is a supported way to say "no
+tested floor yet" — a made-up value would instead be a claim with no check
+behind it. The requirement itself is recorded in the manifest's
+`hostRequirements` block, which no host code path reads; this table is the
+source of truth. Chordr has two tiers of host dependency, and a host that only
+satisfies the first still loads the plugin and works for everything except
+automatic diagram enrichment:
 
 | Tier | What it needs | Requirement |
 | --- | --- | --- |
-| **Analysis-only** — `window.chordr.*` helpers, the chord/lyrics view, audio-based detection, the server `chordr_analyze_chart_chords_v1(...)` callable | `context.load_sibling` (backend), plugin CSS + highway chart getters (frontend), Node.js ≥ 16.6 on the host for server-side chord analysis | Works on any feedBack core that loads plugins at all |
-| **Automatic chart enrichment** — `chart-transform` provider registration so `highway.getChordTemplates()` picks up generated diagrams without any per-plugin integration | Core's chart-transform capability (feedBack#952) | Core commit [`05be9eb`](https://github.com/got-feedBack/feedBack/commit/05be9eb) or later — landed July 19, after the `v0.3.0-alpha.1` tag. No tagged core release has been audited against this yet; treat the commit hash as the floor until one is |
+| **Analysis-only** — `window.chordr.*` helpers, the chord/lyrics view, audio-based detection, the server `chordr_analyze_chart_chords_v1(...)` callable | `context.load_sibling` (backend), plugin CSS + highway chart getters (frontend), the `song:loaded` event and `window.feedBack.currentSong` (chord/lyrics view), Node.js ≥ 16.6 on the host for server-side chord analysis | No core version floor has been identified — the requirement is in those named core APIs, none of which has been tied to a release yet. Treat this tier as untested against any specific build, not as universally supported |
+| **Automatic chart enrichment** — `chart-transform` provider registration so `highway.getChordTemplates()` picks up generated diagrams without any per-plugin integration | Core's chart-transform capability (feedBack#952) | Core commit [`05be9eb`](https://github.com/got-feedBack/feedBack/commit/05be9eb) or later — landed 2026-07-19, after the `v0.3.0-alpha.1` tag (2026-07-03), which is core's only version tag. No tagged core release contains it, so treat the commit hash as the floor until one does |
 
 `window.chordr.getChartTransformStatus()` reports one of four states
 (checked against each dispatch's resolved `status` — core's capability
