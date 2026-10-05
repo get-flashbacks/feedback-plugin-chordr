@@ -23,7 +23,6 @@ Scope of this plugin (tracked as separate issues, roughly in dependency order):
    Opens its own short-lived WebSocket for the `lyrics` message (the one
    chart field with no highway getter); chords/templates come from
    `highway.getChords()`/`getChordTemplates()` as usual.
-4. **ChordPro export** (#4) for that chord/lyrics view.
 5. **Audio-based chord detection** (#5, implemented) — a fallback chord
    source for songs whose chart has no note/chord data at all (a
    loose-folder song, say). Server-side chroma-CQT + template matching
@@ -61,12 +60,14 @@ await window.chordr.generateAccompanimentFromLyrics(filename, {
   windowSeconds: 2,   // chord-change grid; smaller = more frequent changes
 });
 window.chordr.identifyFromHighway(chordNotes, highway);
+window.chordr.groupChordEvents(chords);
 window.chordr.generateChordTemplates(chords, existingTemplates, {
   tuning,
   capo,
   stringCount,
   isBass,
 });
+window.chordr.getChartTransformStatus(); // "pending" | "active" | "registered" | "unavailable"
 ```
 
 `identifyChord` accepts the real chart wire shape `[{ s, f }, ...]` and also
@@ -115,6 +116,23 @@ progression that was actually played. Returns `null` when there is nothing
 to harmonize from: the lyrics_karaoke route is unavailable or 404s, the
 track is lyrics-only (no `midi` on any token), or the response's
 `schema_version` isn't the one this function understands.
+`groupChordEvents` returns a `{ parentIndex, continuation }` entry for every
+chord event. A nonempty event whose played `{s,f}` notes are a subset of the
+active preceding full chord retains that full chord's parent index, including
+across several different partial strums. Other shapes start a new group;
+unknown shapes are not guessed from pitch classes. The same analysis is
+available to server-side plugins through the versioned
+`app.state.chordr_analyze_chart_chords_v1(chords, context=...)` callable when
+Chordr is active; it runs Chordr's JavaScript implementation in one Node
+batch and returns `grouped` plus `identities` without modifying chart data.
+That call is synchronous and blocking (a Node subprocess, bounded to ~20s),
+so server consumers must invoke it via
+`fastapi.concurrency.run_in_threadpool` or from a sync `def` route — not
+inline in an `async def` handler — and the host needs Node.js >= 16.6.
+`resolvedIdentities` inherits the parent chord's identity for otherwise
+unnamed partial strums; a shape that is not a subset remains unresolved.
+`resolvedNames` also uses an authored template name where one exists, so
+Chordr need not support every unusual chord quality to retain that label.
 
 `generateChordTemplates(chords, existingTemplates, ctx)` takes the wire-shape
 `chords` array (`[{ id, notes: [{s,f}, ...] }, ...]`) and the current
@@ -138,6 +156,51 @@ any failure (network error, no audio, detection failed — the caller just
 has no chords for that song, same as a chart with none). The chord/lyrics
 view calls it automatically as a fallback; exposed for any other
 lyrics/chord-consuming plugin that wants the same source.
+
+## Host compatibility
+
+`minHost` is deliberately unset in `plugin.json` (it was a `1.0.0` placeholder
+matching no real dependency — see [chordr#21](https://github.com/get-flashbacks/feedback-plugin-chordr/issues/21)).
+Core reads the key and passes it through to `/api/plugins` as `min_host`
+("passthrough only in R0 — enforcement is deferred to R4"), and unset is an
+explicitly supported state, so leaving it out is a supported way to say "no
+tested floor yet" — a made-up value would instead be a claim with no check
+behind it. The requirement itself is recorded in the manifest's
+`hostRequirements` block, which no host code path reads; this table is the
+source of truth. Chordr has two tiers of host dependency, and a host that only
+satisfies the first still loads the plugin and works for everything except
+automatic diagram enrichment:
+
+| Tier | What it needs | Requirement |
+| --- | --- | --- |
+| **Analysis-only** — `window.chordr.*` helpers, the chord/lyrics view, audio-based detection, the server `chordr_analyze_chart_chords_v1(...)` callable | `context.load_sibling` (backend), plugin CSS + highway chart getters (frontend), the `song:loaded` event and `window.feedBack.currentSong` (chord/lyrics view), Node.js ≥ 16.6 on the host for server-side chord analysis | No core version floor has been identified — the requirement is in those named core APIs, none of which has been tied to a release yet. Treat this tier as untested against any specific build, not as universally supported |
+| **Automatic chart enrichment** — `chart-transform` provider registration so `highway.getChordTemplates()` picks up generated diagrams without any per-plugin integration | Core's chart-transform capability (feedBack#952) | Core commit [`05be9eb`](https://github.com/got-feedBack/feedBack/commit/05be9eb) or later — landed 2026-07-19, after the `v0.3.0-alpha.1` tag (2026-07-03), which is core's only version tag. No tagged core release contains it, so treat the commit hash as the floor until one does |
+
+`window.chordr.getChartTransformStatus()` reports one of four states
+(checked against each dispatch's resolved `status` — core's capability
+dispatch *resolves* on failure, e.g. `{status: 'no-owner'}` when nothing
+owns the capability at all, rather than rejecting, so "the promise chain
+completed" is not by itself evidence of success). It's written once at
+registration time and never revisited — it reflects how registration/
+selection resolved, not live per-song rendering: core stages the transform
+onto highway surfaces lazily (on `song:ready`/`highway:created`), and
+Chordr's own transform can legitimately return no diagram for a chart it
+doesn't need to enrich, so `"active"` is not proof any diagram has actually
+rendered:
+
+| Status | Meaning |
+| --- | --- |
+| `"pending"` | Registration hasn't resolved yet. This is also the **permanent** value on a core with no capabilities framework at all — that tier never calls `_registerChartTransform()` in the first place (it waits forever on an event only the framework emits), so it never reaches the `"unavailable"` branch or logs a warning |
+| `"active"` | Core's chart-transform coordinator currently selects **this** provider |
+| `"registered"` | Registered successfully, but not currently selected — either a different provider holds the selection (expected under `ownership: "multi-provider"`, not a warning), or this provider's own self-select attempt resolved non-success (also not a warning). Either way, this provider's diagrams are not live |
+| `"unavailable"` | The capabilities framework is present but `register-provider`/`inspect`/`select-provider` resolved with a non-success status (typically: no `chart-transform` owner registered on this host) — logs a `console.warn` naming which step failed |
+
+Analysis-only consumers (`window.chordr.*` outside this accessor, the
+chord/lyrics view, audio detection) are unaffected by any of these states.
+
+The lyrics-view filename-resolution bug once tracked here (`_connectLyricsSocket`
+guarding on the nonexistent `songInfo.filename`) is fixed — see CHANGELOG's
+`[Unreleased]` `### Fixed` entry.
 
 ## Server routes
 
@@ -165,6 +228,9 @@ node tests/generate_accompaniment_from_lyrics.test.js
 node tests/build_lyric_lines.test.js
 node tests/chord_lyrics_view.test.js
 python3 -m unittest tests/test_audio_chords.py
+node --test tests/*.test.js
+python3 -m pip install -r tests/requirements.txt
+python3 -m unittest discover -s tests -p 'test_*.py'
 ```
 
 ## License

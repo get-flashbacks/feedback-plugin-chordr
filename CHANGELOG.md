@@ -24,6 +24,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `window.chordr.getChartTransformStatus()` reports whether the
+  `chart-transform` provider is registered and currently selected on this
+  host (`"pending"` / `"active"` / `"registered"` / `"unavailable"`).
+  On a core that has the capabilities framework but no `chart-transform`
+  owner registered (any build before `05be9eb`), every dispatch resolves
+  a failure status (e.g. `{status: 'no-owner'}`) rather than rejecting,
+  and this is now checked explicitly — the accessor reports
+  `"unavailable"` and a single `console.warn` fires, instead of silently
+  looking fully enabled. (A core with no capabilities framework at all
+  never calls into this path in the first place — see README's Host
+  compatibility section for that tier's `"pending"` floor.) README
+  documents the resulting two-tier host-compatibility requirement
+  (analysis-only vs. automatic enrichment) and the four-state status
+  contract. (#21)
+- Expose conservative chord-event grouping in `window.chordr.groupChordEvents`
+  and a server-side analysis callable. Partial fret/string shapes remain
+  attached to the preceding full chord, including across successive partial
+  strums; unrelated or unknown shapes start a new group.
 - Auto-generate chord diagrams for chords whose chart data carries no
   usable template (missing, or GP-import placeholder all `-1` frets) —
   `window.chordr.generateChordTemplates()` derives a fret/string shape
@@ -43,5 +61,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   matching (`librosa`) on uploaded audio; the chord/lyrics view triggers
   it automatically, client-side, only when the chart has no chords.
   Adds `window.chordr.detectChordsFromAudio()`. (#5)
+
+### Changed
+
+- `minHost` is now unset in `plugin.json` instead of carrying the `1.0.0`
+  placeholder, which matched no real dependency (#21). Core reads the key and
+  passes it through to `/api/plugins` as `min_host` (passthrough in the
+  current release, enforcement deferred) and treats unset as a supported
+  value, so absent is the honest "no tested floor yet" state — a version
+  number here would be a guess. The requirement is recorded in a new
+  `hostRequirements` block, splitting the two tiers: **analysis-only**
+  operation — `window.chordr.*` helpers, the chord/lyrics view, audio
+  detection, the server `chordr_analyze_chart_chords_v1(...)` callable — has
+  no core version floor identified (it needs `context.load_sibling`, plugin
+  CSS, the highway chart getters and the `song:loaded` event, none yet tied to
+  a release, so it is untested rather than universally supported), while
+  **automatic chart enrichment** additionally needs core's `chart-transform`
+  capability (feedBack#952), which landed in core commit `05be9eb` (2026-07-19)
+  — after `v0.3.0-alpha.1`, core's only version tag. `hostRequirements` is
+  documentation-only (no host code path reads it); README's Host compatibility
+  section is the source of truth. Node.js ≥ 16.6 stays a separate requirement
+  in `serverRequires`. Add `minHost` back with a real version when a tagged
+  core release identifies the floor.
+
+### Fixed
+
+- The chord/lyrics view (chordr#3) now actually opens its lyrics WebSocket
+  on a real host, and reopens it for the right song. Two bugs, one root
+  cause chain: `_connectLyricsSocket` guarded on
+  `highway.getSongInfo().filename`, but the real `song_info` WS payload never
+  carries a `filename` field, so the guard was always true and the socket
+  never opened — the view silently never showed lyrics. Switching to
+  `window.feedBack.currentSong.filename`/`.arrangementIndex` (core's own copy,
+  the same source the audio-detection path already keys its cache on via
+  `songInfo.audio_url`) fixed the open, but core publishes `currentSong` in
+  its `song_info` handler — one WebSocket round trip *after* `playSong`
+  returns — so a read in the `playSong` wrapper subscribed to the previous
+  song's lyrics, or to nothing on the first song after the view was enabled.
+  The reconnect is now driven by core's own `song:loaded` event (whose
+  `detail` is that object), subscribed while the view is active; the
+  `playSong` wrap keeps only its stale-state clear. Audio detection moved to
+  the same event, off the stale read it happened to self-heal from. This
+  defect never had an issue of its own: it was a paragraph in #21's body, and
+  raising `minHost` never fixed it.
+- Chord identification on piano/keys arrangements no longer misreads their
+  MIDI-bucket-encoded `{s, f}` wire notes as guitar string+fret positions.
+  Piano/keys arrangements (detected the same way `feedBack-plugin-piano`
+  does) now decode `midi = s*24 + f` directly, and auto-generated chord
+  templates for them no longer write a nonsense guitar fret diagram. Fixes
+  a bug where an unnamed C major piano voicing was auto-named "D". (#19)
 
 <!-- Add entries under Added, Changed, Deprecated, Removed, Fixed, or Security as changes land. -->

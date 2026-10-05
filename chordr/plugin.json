@@ -3,6 +3,8 @@
   "name": "Chordr",
   "version": "0.5.0",
   "description": "Derives chords and generates playable keys-first or guitar arrangements from chart data and audio analysis.",
+  "version": "0.5.4",
+  "description": "Derives chord names and shapes from chart data for guitar and piano arrangements — a shared capability other plugins consume rather than duplicating chord logic themselves.",
   "category": "tools",
   "type": "utility",
   "icon": "🎼",
@@ -10,7 +12,20 @@
   "scriptType": "classic",
   "styles": "assets/plugin.css",
   "routes": "routes.py",
-  "minHost": "1.0.0",
+  "serverRequires": {
+    "node": ">= 16.6"
+  },
+  "hostRequirements": {
+    "note": "Documentation only — no host code path reads this key (core's /api/plugins allowlist surfaces minHost as min_host, not this block). The two-tier table in README 'Host compatibility' is the source of truth.",
+    "analysis": {
+      "coreVersionFloor": "none identified",
+      "needs": "context.load_sibling (backend); plugin CSS and the highway chart getters (frontend); the song:loaded event and window.feedBack.currentSong (chord/lyrics view); Node >= 16.6 on the host for the server chart-analysis callable. None of these has been tied to a core release yet, so this tier is untested against any specific build rather than universally supported."
+    },
+    "chartEnrichment": {
+      "coreCommit": "05be9eb",
+      "note": "Automatic diagram enrichment additionally needs core's chart-transform capability (feedBack#952), added 2026-07-19 — after v0.3.0-alpha.1 (2026-07-03), the only core version tag. No tagged release contains it, so the commit hash is the floor until a release identifies a version."
+    }
+  },
   "standards": ["capability-pipelines.v1"],
   "capabilities": {
     "chart-transform": {

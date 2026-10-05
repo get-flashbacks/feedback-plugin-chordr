@@ -35,6 +35,24 @@ if (!window[`__${PLUGIN_ID}_installed`]) {
   const NOTE_NAMES_SHARP = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
   const NOTE_NAMES_FLAT  = ["C", "Db", "D", "Eb", "E", "F", "Gb", "G", "Ab", "A", "Bb", "B"];
 
+  // Same pattern feedBack-plugin-piano's matchesArrangement uses to claim an
+  // arrangement (KEYS_PATTERNS in that plugin's screen.js) — kept identical
+  // so "is this a piano/keys arrangement" agrees across both plugins.
+  const KEYS_PATTERNS = /\b(?:keys|piano|keyboard|synth)\b/i;
+
+  // Piano/keys arrangements reuse the guitar wire format's {s, f} fields to
+  // carry a MIDI-bucket encoding (`midi = s*24 + f`, see
+  // feedBack-plugin-piano's CLAUDE.md) — NOT a real string index + fret
+  // number. Decoding it through the guitar tuning-table math in
+  // pitchFromBase() silently produces a wrong pitch (chordr#19). `s` and
+  // `f` are discrete bucket components, so a non-integer value (e.g. a
+  // stray guitar-shaped fret) is rejected rather than producing a pitch
+  // that looks valid but isn't.
+  const midiFromPianoNote = (s, f) => {
+    if (!Number.isInteger(s) || !Number.isInteger(f)) return null;
+    return s * 24 + f;
+  };
+
   // Standard open-string base MIDI list for an arrangement, index 0 = lowest.
   // Mirrors app.js `_tuningOffsetsToFreqs`: a 4/5-string bass uses its own
   // low base; a 4/5-string non-bass (a guitar voicing) borrows the low
@@ -52,7 +70,7 @@ if (!window[`__${PLUGIN_ID}_installed`]) {
   // OFFSETS from standard (not absolute pitch) — see lib/song.py's
   // pitch_from_base, which this mirrors. Returns null when `string` has no
   // tuning/base entry.
-  function pitchFromBase(base, capo, tuning, string, fret) {
+  const pitchFromBase = (base, capo, tuning, string, fret) => {
     // Number.isInteger(NaN) is false, so a caller passing an undefined/
     // malformed string or fret (e.g. reading the wrong property name off a
     // note object) is rejected here explicitly, rather than `string < 0 ||
@@ -63,9 +81,9 @@ if (!window[`__${PLUGIN_ID}_installed`]) {
         string < 0 || string >= tuning.length || !Number.isFinite(fret)) {
       return null;
     }
-    const root = string < base.length ? base[string] : base[base.length - 1];
-    return root + Number(tuning[string] || 0) + Number(capo || 0) + fret;
-  }
+    const root = string < base.length ? base.at(string) : base.at(-1);
+    return root + Number(tuning.at(string) || 0) + Number(capo || 0) + fret;
+  };
 
   function noteName(pitchClass, useFlats) {
     const names = useFlats ? NOTE_NAMES_FLAT : NOTE_NAMES_SHARP;
@@ -140,6 +158,22 @@ if (!window[`__${PLUGIN_ID}_installed`]) {
   function identifyChord(chordNotes, ctx) {
     const options = ctx || {};
     if (!Array.isArray(chordNotes) || chordNotes.length === 0) return null;
+
+    // Piano/keys: {s, f} is a MIDI bucket, not string+fret — decode it
+    // directly instead of running it through the guitar tuning-table math.
+    if (options.isPiano) {
+      const midis = [];
+      for (const n of chordNotes) {
+        if (!n || typeof n !== 'object') continue;
+        const s = Number(n.s ?? n.string);
+        const f = Number(n.f ?? n.fret);
+        const midi = midiFromPianoNote(s, f);
+        if (midi !== null) midis.push(midi);
+      }
+      if (midis.length === 0) return null;
+      return identifyFromMidis(midis, options);
+    }
+
     const capo = options.capo || 0;
     const stringCount = options.stringCount || (options.tuning && options.tuning.length) || 6;
     const tuning = options.tuning && options.tuning.length ? options.tuning : new Array(stringCount).fill(0);
@@ -156,6 +190,40 @@ if (!window[`__${PLUGIN_ID}_installed`]) {
     if (midis.length === 0) return null;
     return identifyFromMidis(midis, options);
   }
+
+  // Group consecutive chord events by their played fret/string shape. A
+  // voicing containing only notes of the active chord is a continuation of
+  // that chord, even when an importer gave the partial its own unnamed
+  // template. Keep the full parent shape active across repeated partials;
+  // comparing only with the immediately previous partial would incorrectly
+  // start a new group when the next strum selects different chord tones.
+  // This is deliberately a physical-shape test, not a pitch-class guess:
+  // an unfamiliar or inverted shape must remain a separate, reviewable event.
+  const groupChordEvents = (chords) => {
+    if (!Array.isArray(chords)) return [];
+    const result = [];
+    let parentIndex = -1;
+    let parentShape = new Set();
+    chords.forEach((chord, i) => {
+      const shape = new Set();
+      const notes = Array.isArray(chord?.notes) ? chord.notes : [];
+      for (const note of notes) {
+        const s = Number(note?.s ?? note?.string);
+        const f = Number(note?.f ?? note?.fret);
+        if (Number.isInteger(s) && s >= 0 && Number.isInteger(f) && f >= 0) {
+          shape.add(`${s}:${f}`);
+        }
+      }
+      const continuation = shape.size > 0 && parentShape.size > 0 &&
+        [...shape].every((key) => parentShape.has(key));
+      if (!continuation) {
+        parentIndex = i;
+        parentShape = shape;
+      }
+      result.push({ parentIndex, continuation });
+    });
+    return result;
+  };
 
   function identifyPianoChord(midiNotes, opts) {
     if (!Array.isArray(midiNotes) || midiNotes.length === 0) return null;
@@ -333,6 +401,18 @@ if (!window[`__${PLUGIN_ID}_installed`]) {
       ? generateGuitarArrangement(chords, opts)
       : generateKeysArrangement(chords, opts);
   }
+  // Shared instrument-detection: both identifyFromHighway and the
+  // chart-transform provider (_transformInput) need the same isBass/isPiano
+  // read off a songInfo-shaped object, so it lives here once rather than
+  // being reimplemented at each call site.
+  const _getArrangementContext = (songInfo) => {
+    const info = songInfo || {};
+    const arrangementText = `${info.arrangement || ""} ${info.arrangement_smart_name || ""}`;
+    return {
+      isBass: /bass/i.test(arrangementText),
+      isPiano: KEYS_PATTERNS.test(arrangementText),
+    };
+  };
 
   function identifyFromHighway(chordNotes, highway) {
     const hw = highway || window.highway;
@@ -341,12 +421,13 @@ if (!window[`__${PLUGIN_ID}_installed`]) {
     }
     const songInfo = hw.getSongInfo() || {};
     const stringCount = typeof hw.getStringCount === "function" ? hw.getStringCount() : undefined;
-    const isBass = /bass/i.test(`${songInfo.arrangement || ""} ${songInfo.arrangement_smart_name || ""}`);
+    const { isBass, isPiano } = _getArrangementContext(songInfo);
     return identifyChord(chordNotes, {
       tuning: songInfo.tuning,
       capo: songInfo.capo,
       stringCount,
       isBass,
+      isPiano,
     });
   }
 
@@ -372,10 +453,15 @@ if (!window[`__${PLUGIN_ID}_installed`]) {
   // `fingers` has no source in raw chart data (same as GP imports, see
   // core CLAUDE.md: "GP imports currently emit all -1 since pre-import
   // sources don't carry finger data") so it's left as the same sentinel.
-  function _shapeFromChordNotes(chordNotes, stringCount) {
+  // `noDiagram` skips the per-note fret-filling pass and returns just the
+  // all -1 sentinel shape — used for piano/keys chords, where {s, f} is a
+  // MIDI bucket rather than a string+fret position and a per-string shape
+  // has no meaning.
+  const _shapeFromChordNotes = (chordNotes, stringCount, noDiagram) => {
     const n = Math.max(1, Number(stringCount) || 6);
     const frets = new Array(n).fill(-1);
     const fingers = new Array(n).fill(-1);
+    if (noDiagram) return { frets, fingers };
     for (const note of chordNotes || []) {
       if (!note || typeof note !== "object") continue;
       const s = Number(note.s ?? note.string);
@@ -384,7 +470,7 @@ if (!window[`__${PLUGIN_ID}_installed`]) {
       frets[s] = f;
     }
     return { frets, fingers };
-  }
+  };
 
   // `chords` is the raw wire-format array (`{ t, id, notes: [{s,f,...}] }`,
   // see core's WebSocket protocol reference — `id` indexes `chordTemplates`).
@@ -408,7 +494,7 @@ if (!window[`__${PLUGIN_ID}_installed`]) {
       if (!Array.isArray(chord.notes) || chord.notes.length === 0) continue;
       if (!_templateNeedsGeneration(templates[id])) continue;
 
-      const shape = _shapeFromChordNotes(chord.notes, stringCount);
+      const shape = _shapeFromChordNotes(chord.notes, stringCount, options.isPiano);
       const identified = identifyChord(chord.notes, options);
       const existingName = templates[id] && templates[id].name;
       templates[id] = {
@@ -432,24 +518,86 @@ if (!window[`__${PLUGIN_ID}_installed`]) {
   function _transformInput(input) {
     const chords = Array.isArray(input.allChords) ? input.allChords : input.chords;
     const songInfo = input.songInfo || {};
-    const isBass = /bass/i.test(`${songInfo.arrangement || ""} ${songInfo.arrangement_smart_name || ""}`);
+    const { isBass, isPiano } = _getArrangementContext(songInfo);
     const merged = generateChordTemplates(chords, input.chordTemplates, {
       tuning: songInfo.tuning,
       capo: songInfo.capo,
       stringCount: input.stringCount,
       isBass,
+      isPiano,
     });
     return merged ? { chordTemplates: merged } : null;
   }
 
-  function _registerChartTransform() {
-    const api = window.feedBack && window.feedBack.capabilities;
-    if (!api || typeof api.dispatch !== "function") return;
-    if (window[`__${PLUGIN_ID}_transformRegistered`]) return;
-    window[`__${PLUGIN_ID}_transformRegistered`] = true;
+  // chordr#21 — automatic chart-transform enrichment (auto-generated chord
+  // diagrams) needs a core build with the chart-transform capability
+  // (feedBack#952, core commit 05be9eb+); analysis-only use of
+  // window.chordr/the server callable does not. dispatch() RESOLVES on
+  // failure (e.g. {status:'no-owner'} when no owner is registered for the
+  // capability at all) rather than rejecting — core's capabilities.js
+  // only rejects on a genuinely unexpected exception — so every dispatch
+  // below must be checked against its resolved `status`, not just whether
+  // the promise chain completed. _chartTransformStatus makes the outcome
+  // introspectable (README's Host compatibility section documents this).
+  // Written once at registration time and never revisited afterward — it
+  // reflects how registration/selection resolved, NOT live per-song
+  // rendering (core stages the transform onto highway surfaces lazily, on
+  // song:ready/highway:created, and Chordr's own transform can legitimately
+  // return null for a chord it doesn't need to enrich) — a later
+  // clear-provider or a transform that throws on every chart still reads
+  // whatever this resolved to:
+  //   "pending"    — registration hasn't resolved yet (also the permanent
+  //                  value on a core with no capabilities framework at
+  //                  all — see the no-dispatch guard below)
+  //   "active"     — core's chart-transform coordinator currently selects
+  //                  THIS provider; not proof any diagram has rendered
+  //   "registered" — registered successfully, but not currently selected
+  //                  (a different provider holds the selection, or this
+  //                  provider's own self-select attempt didn't resolve
+  //                  successfully) — this provider's diagrams are not live
+  //   "unavailable"— register-provider/inspect/select-provider resolved
+  //                  with a non-success status (framework present, no
+  //                  chart-transform owner registered for it)
+  let _chartTransformStatus = "pending";
 
-    const providerId = `${PLUGIN_ID}_diagrams`;
-    api.dispatch({
+  // Dispatch result shape from core's static/capabilities.js `dispatch()`.
+  // @typedef {{ status: string, payload?: { active?: string } }} DispatchResult
+  //
+  // "applied"/"overridden" are the only success statuses _dispatchStatus()
+  // can produce; everything else (no-owner, no-handler, unsupported-command,
+  // incompatible-version, error, ...) means the command did not do what it
+  // asked for, even though the promise resolved rather than rejected.
+  // const arrow functions, not function declarations nested in this file's
+  // top-level `if` block — matches this repo's existing convention for
+  // avoiding block-scoped function-declaration hoisting risk (see
+  // midiFromPianoNote / _getArrangementContext / _shapeFromChordNotes above).
+  const _isAppliedStatus = (/** @type {DispatchResult} */ result) => {
+    const status = result && result.status;
+    return status === "applied" || status === "overridden";
+  };
+
+  const _describeStatus = (/** @type {DispatchResult} */ result) => (result && result.status) || "no response";
+
+  const _warnChartTransformUnavailable = (reason) => {
+    _chartTransformStatus = "unavailable";
+    if (typeof console !== "undefined") {
+      console.warn(
+        `[${PLUGIN_ID}] chart-transform unavailable (${reason}) — ` +
+        "auto-generated chord diagrams are disabled (analysis via window.chordr " +
+        "still works). Needs feedBack core 05be9eb+ (see chordr#21)."
+      );
+    }
+  };
+
+  const providerId = `${PLUGIN_ID}_diagrams`;
+
+  // Linear register -> inspect -> maybe select-provider flow. async/await
+  // here (rather than chained .then()s) keeps each step's status check
+  // adjacent to the call it checks; the caller below stays a plain
+  // function so this async function's own rejection can't reach
+  // addEventListener's listener machinery unhandled.
+  const _tryRegisterChartTransform = async (api) => {
+    const registerResult = await api.dispatch({
       capability: "chart-transform",
       command: "register-provider",
       source: providerId,
@@ -464,22 +612,65 @@ if (!window[`__${PLUGIN_ID}_installed`]) {
           }
         },
       },
-    }).then(() => api.dispatch({ capability: "chart-transform", command: "inspect", source: providerId }))
-      .then((result) => {
-        // Never steal an existing selection — only self-select as a
-        // sensible default when nothing is active yet (mirrors how
-        // register-provider itself only auto-restores a persisted
-        // selection for THIS exact provider id, never forces one).
-        const snapshot = (result && (result.payload || result)) || {};
-        if (!snapshot.active) {
-          return api.dispatch({
-            capability: "chart-transform", command: "select-provider",
-            source: providerId, payload: { providerId },
-          });
-        }
-      })
-      .catch(() => { /* capability graph unavailable — diagrams just won't auto-generate */ });
-  }
+    });
+    if (!_isAppliedStatus(registerResult)) {
+      _warnChartTransformUnavailable(`register-provider: ${_describeStatus(registerResult)}`);
+      return;
+    }
+
+    const inspectResult = await api.dispatch({ capability: "chart-transform", command: "inspect", source: providerId });
+    if (!_isAppliedStatus(inspectResult)) {
+      _warnChartTransformUnavailable(`inspect: ${_describeStatus(inspectResult)}`);
+      return;
+    }
+    const snapshot = (inspectResult && (inspectResult.payload || inspectResult)) || {};
+    if (snapshot.active === providerId) {
+      _chartTransformStatus = "active";
+      return;
+    }
+    // Never steal an existing selection — only self-select as a sensible
+    // default when nothing is active yet (mirrors how register-provider
+    // itself only auto-restores a persisted selection for THIS exact
+    // provider id, never forces one).
+    if (snapshot.active) {
+      _chartTransformStatus = "registered"; // another provider holds the selection
+      return;
+    }
+
+    const selectResult = await api.dispatch({
+      capability: "chart-transform", command: "select-provider",
+      source: providerId, payload: { providerId },
+    });
+    // A non-success select (e.g. an unknown provider id) is not a
+    // host-compatibility gap — registration itself already succeeded — so
+    // this falls back to "registered" without warning, unlike the two
+    // checks above.
+    _chartTransformStatus = _isAppliedStatus(selectResult) ? "active" : "registered";
+  };
+
+  // Not async: passed directly to addEventListener below, and an async
+  // function there would leave its rejection unhandled by the listener
+  // machinery.
+  const _registerChartTransform = () => {
+    const api = window.feedBack && window.feedBack.capabilities;
+    // Defensive only: on a real feedBack build, capabilities.js publishes
+    // window.feedBack.capabilities and fires 'feedBack:capabilities:ready'
+    // in the same synchronous block, and v3/index.html loads it before the
+    // plugin scripts that would call this function — so this branch isn't
+    // actually reachable from the caller below, which instead just waits
+    // forever on an event a host with no capabilities framework never
+    // fires (status stays "pending", not "unavailable", on that tier).
+    if (!api || typeof api.dispatch !== "function") {
+      _warnChartTransformUnavailable("no capabilities API on this host");
+      return;
+    }
+    if (window[`__${PLUGIN_ID}_transformRegistered`]) return;
+    window[`__${PLUGIN_ID}_transformRegistered`] = true;
+
+    _tryRegisterChartTransform(api).catch(() => {
+      _warnChartTransformUnavailable("dispatch threw unexpectedly");
+    });
+  };
 
   if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
     if (window.feedBack && window.feedBack.capabilities) _registerChartTransform();
@@ -674,13 +865,28 @@ if (!window[`__${PLUGIN_ID}_installed`]) {
     if (idx >= 0) _updateSungState(viewState, time);
   };
 
-  const _connectLyricsSocket = (highway) => {
-    const songInfo = highway.getSongInfo ? highway.getSongInfo() : null;
-    if (!songInfo || !songInfo.filename || typeof WebSocket === "undefined") return;
+  // `song` is core's `currentSong` object (see _startView and _onSongLoaded).
+  // The real `song_info` WebSocket payload carries no `filename` field at all
+  // (tuning/stringCount/capo/arrangement/audio_url/... — see core CLAUDE.md's
+  // WS protocol reference), so `highway.getSongInfo().filename` is always
+  // undefined on a real host. `filename` is core's own copy of the WS URL's
+  // path segment, already decoded — so it is encoded exactly once below, never
+  // decoded. `arrangementIndex` is copied straight from
+  // `song_info.arrangement_index`, i.e. the server-RESOLVED index (always
+  // >= 0), not the requested query param (which may be -1 for "smart
+  // auto-pick") — so passing it back is safe.
+  const _connectLyricsSocket = (song) => {
+    // A reconnect replaces the open socket rather than leaking it: the
+    // previous song's socket would still deliver its own `lyrics` message and
+    // overwrite the new song's lines.
+    if (viewState.ws) {
+      viewState.ws.close();
+      viewState.ws = null;
+    }
+    if (!song || !song.filename || typeof WebSocket === "undefined") return;
 
-    let name = songInfo.filename;
-    try { name = decodeURIComponent(name); } catch (_) { /* already decoded */ }
-    const arrIndex = songInfo.arrangement_index || 0;
+    const name = song.filename;
+    const arrIndex = song.arrangementIndex || 0;
     const scheme = location.protocol === "https:" ? "wss" : "ws";
     const url = `${scheme}://${location.host}/ws/highway/${encodeURIComponent(name)}?arrangement=${arrIndex}`;
 
@@ -958,6 +1164,26 @@ if (!window[`__${PLUGIN_ID}_installed`]) {
     _attachAudioChordsWhenReady(promise, requestedFor);
   };
 
+  // Core's event bus (static/capabilities.js) — an EventTarget with on/off
+  // aliases, and the only thing that publishes `song:loaded`.
+  const _songLoadedBus = () =>
+    window.feedBack && typeof window.feedBack.on === "function" ? window.feedBack : null;
+
+  // Point the view at the song core has just published, for BOTH lyrics and
+  // audio detection. This has to be driven by core publishing `currentSong`,
+  // not by the playSong wrapper resuming: core's playSong returns as soon as
+  // it has opened the WebSocket and never awaits `song_info` (core CLAUDE.md
+  // Pitfall #1), so at that instant `currentSong` still describes the song
+  // being left behind — reading it there subscribed to the previous song's
+  // lyrics, and read `null` on the first song after the view was enabled.
+  // `song:loaded`'s detail IS that object, published one round trip later.
+  const _onSongLoaded = (event) => {
+    if (!viewState.active) return;
+    _connectLyricsSocket(event && event.detail);
+    const highway = window.highway;
+    if (highway) _maybeDetectChordsFromAudio(highway);
+  };
+
   const _buildViewOverlay = () => {
     const player = document.getElementById("player");
     if (!player) return;
@@ -984,7 +1210,15 @@ if (!window[`__${PLUGIN_ID}_installed`]) {
     viewState.renderedWords = [];
     viewState.audioChords = null;
     _buildViewOverlay();
-    _connectLyricsSocket(highway);
+    // Subscribe before snapshotting, and only while the view is active, so
+    // toggling can't accumulate listeners and a song that loads with the view
+    // closed can't open a lyrics socket behind the user's back.
+    const bus = _songLoadedBus();
+    if (bus) bus.on("song:loaded", _onSongLoaded);
+    // A song is always already loaded by the time a user can toggle the view
+    // on, so this path reads core's published copy directly rather than
+    // waiting for the next song:loaded.
+    _connectLyricsSocket(window.feedBack && window.feedBack.currentSong);
     _maybeDetectChordsFromAudio(highway);
     _viewLoop();
     // _wrapPlaySongForView() already ran once at plugin load, but plugins
@@ -1001,6 +1235,8 @@ if (!window[`__${PLUGIN_ID}_installed`]) {
   const _stopView = (btn) => {
     viewState.active = false;
     if (btn) btn.classList.remove("chordr-view-active");
+    const bus = _songLoadedBus();
+    if (bus) bus.off("song:loaded", _onSongLoaded);
     if (viewState.rafId) cancelAnimationFrame(viewState.rafId);
     viewState.rafId = null;
     if (viewState.ws) {
@@ -1021,19 +1257,21 @@ if (!window[`__${PLUGIN_ID}_installed`]) {
     }
   };
 
-  // Reconnect the lyrics socket on every new song while the view is active
-  // — the WS the view opened for the previous song is for the previous
-  // filename/arrangement and won't emit again.
+  // Clear the previous song's view state as soon as a new song starts
+  // loading (which can take seconds) — otherwise window.highway can already
+  // reflect the new song's chords/time while viewState.lyricLines still holds
+  // the previous song's lines, showing old lyrics against new playback.
+  //
+  // The reconnect is NOT done here. Core's playSong returns as soon as it has
+  // opened the WebSocket and never awaits song_info, so this wrapper resumes
+  // one network round trip before core publishes the new song — see
+  // _onSongLoaded, which is driven by that publish instead.
   const _wrapPlaySongForView = () => {
     if (window[`__${PLUGIN_ID}_viewPlaySongWrapped`]) return;
     if (typeof window.playSong !== "function") return;
     window[`__${PLUGIN_ID}_viewPlaySongWrapped`] = true;
     const original = window.playSong;
     window.playSong = async function (...args) {
-      // Clear stale lyrics BEFORE awaiting the new song's load (which can
-      // take seconds) — otherwise window.highway can already reflect the
-      // new song's chords/time while viewState.lyricLines still holds the
-      // previous song's lines, showing old lyrics against new playback.
       if (viewState.active) {
         if (viewState.ws) {
           viewState.ws.close();
@@ -1042,14 +1280,8 @@ if (!window[`__${PLUGIN_ID}_installed`]) {
         viewState.lyricLines = [];
         viewState.audioChords = null;
       }
-      const result = await original.apply(this, args);
-      // Reconnect/re-detect only after the new song has loaded, so
-      // getSongInfo()/getChords() reflect it, not the previous song.
-      if (viewState.active && window.highway) {
-        _connectLyricsSocket(window.highway);
-        _maybeDetectChordsFromAudio(window.highway);
-      }
-      return result;
+      // Core's contract for this wrap: always call the original and await it.
+      return original.apply(this, args);
     };
   };
 
@@ -1081,6 +1313,7 @@ if (!window[`__${PLUGIN_ID}_installed`]) {
 
   window.chordr = {
     identifyChord,
+    groupChordEvents,
     identifyPianoChord,
     parseChordName,
     generateChordArrangement,
@@ -1094,9 +1327,26 @@ if (!window[`__${PLUGIN_ID}_installed`]) {
     findLineIndex: _findLineIndex,
     baseOpenStringMidis,
     pitchFromBase,
+    midiFromPianoNote,
     noteName,
     CHORD_QUALITIES,
+    KEYS_PATTERNS,
+    getArrangementContext: _getArrangementContext,
     detectChordsFromAudio,
+    // chordr#21 — "pending" | "active" | "registered" | "unavailable".
+    // "active" means core's chart-transform coordinator currently selects
+    // THIS provider — not proof any diagram has actually rendered, since
+    // core stages the transform onto highway surfaces lazily and Chordr's
+    // own transform can return null for a chart it doesn't need to enrich.
+    // "registered" means installed but not currently selected (either a
+    // different provider holds the selection, or this provider's own
+    // self-select attempt didn't resolve successfully). Lets a caller
+    // distinguish either from "unavailable" instead of assuming enrichment
+    // is live just because window.chordr exists (analysis-only helpers
+    // work regardless of this status). See _registerChartTransform's own
+    // comment for the full state contract, including its one-time-at-load
+    // caveat.
+    getChartTransformStatus: () => _chartTransformStatus,
     // Not part of the public API (see README) — exposed only so
     // tests/chord_lyrics_view.test.js can drive the chord/lyrics view's
     // internals directly instead of standing up a full DOM + WebSocket +
