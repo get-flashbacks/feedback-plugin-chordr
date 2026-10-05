@@ -286,12 +286,18 @@ if (!window[`__${PLUGIN_ID}_installed`]) {
     return out.filter((event, i) => i === out.length - 1 || event.t !== out[i + 1].t);
   }
 
+  // Every chord lasts until the next onset; the trailing one lasts until
+  // `lengthSeconds` (the arrangement's total length, so an audio path whose
+  // last detected chord is short still fills its track). `defaultDuration` is
+  // that trailing chord's own length, and is also the floor for it: a
+  // `lengthSeconds` below the last onset extends nothing rather than
+  // collapsing the final note to a sliver.
   function _eventDuration(events, index, options) {
     const start = events[index].t;
     const next = events[index + 1];
-    const requestedEnd = Number(options.duration);
     const fallback = Math.max(0.1, Number(options.defaultDuration) || 2);
-    const end = next ? next.t : (Number.isFinite(requestedEnd) && requestedEnd > start ? requestedEnd : start + fallback);
+    const length = Number(options.lengthSeconds);
+    const end = next ? next.t : Math.max(start + fallback, Number.isFinite(length) ? length : 0);
     return Math.max(0.1, end - start);
   }
 
@@ -344,12 +350,25 @@ if (!window[`__${PLUGIN_ID}_installed`]) {
     return { instrument: "keys", notes, sourceChords: events.map((e) => ({ t: e.t, name: e.chord.name })) };
   }
 
-  function _bestGuitarShape(chord, options) {
+  // Brute-forces the per-string fret combinations that sound the chord, scored
+  // on bass note, span, muted strings and fret distance. `shapeCache` (a Map,
+  // owned by the caller so it lives exactly as long as one generation call)
+  // memoizes the winner per chord + instrument setup: this search dominates
+  // the guitar path's cost, and a song repeats each chord symbol many times.
+  function _bestGuitarShape(chord, options, shapeCache) {
     const stringCount = Number(options.stringCount) || 6;
     const tuning = options.tuning && options.tuning.length ? options.tuning : new Array(stringCount).fill(0);
-    const base = baseOpenStringMidis(stringCount, false);
+    const isBass = !!options.isBass;
+    // Search against the base the HOST decodes with (see
+    // baseOpenStringMidis): a 4/5-string bass reads fifths, not the low six
+    // guitar strings, so frets chosen against the guitar base sound a
+    // different chord for a bass part. `capo` is added by the host on top of
+    // base+tuning+fret, so the search stays capo-relative.
+    const base = baseOpenStringMidis(stringCount, isBass);
     const maxFret = Math.max(3, Math.min(15, Number(options.maxFret) || 8));
     const wanted = new Set(chord.pitchClasses);
+    const cacheKey = `${chord.pitchClasses.join(",")}/${chord.bass}/${stringCount}/${isBass}/${maxFret}/${tuning.join(",")}`;
+    if (shapeCache && shapeCache.has(cacheKey)) return shapeCache.get(cacheKey);
     const choices = [];
     for (let s = 0; s < stringCount; s++) {
       const open = (base[s] ?? base.at(-1)) + Number(tuning[s] || 0);
@@ -359,23 +378,34 @@ if (!window[`__${PLUGIN_ID}_installed`]) {
     }
     let best = null;
     const visit = (s, frets) => {
+      const pressed = frets.filter((f) => f > 0);
+      const span = pressed.length ? Math.max(...pressed) - Math.min(...pressed) : 0;
+      if (span > 4) return;
+      // Span, muted strings and fret distance never shrink as strings are
+      // added, so their total is a lower bound on any shape reachable from
+      // here (the leaf's bass penalty is >= 0). A prefix already scoring at or
+      // above the incumbent best cannot beat it, so pruning it leaves the
+      // winning shape unchanged while cutting the search from seconds to
+      // milliseconds on wide tunings.
+      const floor = span * 3 + frets.filter((f) => f < 0).length * 1.5 +
+        frets.reduce((n, f) => n + Math.max(0, f), 0) * 0.08;
+      if (best && floor >= best.score) return;
       if (s === choices.length) {
         const sounding = frets.map((f, idx) => f < 0 ? null : (base[idx] ?? base.at(-1)) + Number(tuning[idx] || 0) + f).filter(Number.isFinite);
         if (sounding.length < Math.min(3, chord.pitchClasses.length)) return;
         const covered = new Set(sounding.map((m) => m % 12));
         if (!chord.pitchClasses.every((pc) => covered.has(pc))) return;
-        const pressed = frets.filter((f) => f > 0);
-        const span = pressed.length ? Math.max(...pressed) - Math.min(...pressed) : 0;
-        if (span > 4) return;
         const bassPenalty = sounding[0] % 12 === chord.bass ? 0 : 8;
-        const score = bassPenalty + span * 3 + frets.filter((f) => f < 0).length * 1.5 + frets.reduce((n, f) => n + Math.max(0, f), 0) * 0.08;
+        const score = bassPenalty + floor;
         if (!best || score < best.score) best = { frets: frets.slice(), score };
         return;
       }
       for (const fret of choices[s]) visit(s + 1, [...frets, fret]);
     };
     visit(0, []);
-    return best && best.frets;
+    const frets = best && best.frets;
+    if (shapeCache) shapeCache.set(cacheKey, frets);
+    return frets;
   }
 
   function generateGuitarArrangement(chords, options) {
@@ -383,9 +413,10 @@ if (!window[`__${PLUGIN_ID}_installed`]) {
     const events = _normaliseHarmonyEvents(chords, opts.chordTemplates);
     const notes = [];
     const shapes = [];
+    const shapeCache = new Map();
     for (let i = 0; i < events.length; i++) {
       const event = events[i];
-      const frets = _bestGuitarShape(event.chord, opts);
+      const frets = _bestGuitarShape(event.chord, opts, shapeCache);
       if (!frets) continue;
       const sus = _eventDuration(events, i, opts);
       frets.forEach((f, s) => { if (f >= 0) notes.push({ t: event.t, s, f, sus }); });

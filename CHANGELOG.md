@@ -1,20 +1,5 @@
 # Changelog
 
-## 0.5.0
-
-- Add keys-first chord arrangement generation with two-hand MIDI voicings,
-  slash-bass support, durations, and voice leading.
-- Add guitar arrangement generation with tuning-aware playable fret shapes.
-- Accept both audio detector `{t, name}` events and chart chord/template pairs.
-- Add `generateAccompanimentFromLyrics(filename, options)`: a third
-  arrangement-generation path that harmonizes a song's sung melody (read
-  from lyrics_karaoke's canonical `/playback` payload) into a backing chord
-  sequence — key estimation via a Krumhansl-Schmuckler-style pitch-class
-  correlation, then a windowed best-fit diatonic triad per chord change —
-  and feeds it into the existing keys/guitar generator. Covers a song whose
-  only harmonic information is its vocal line: no chord chart, no full-mix
-  audio worth chord-detecting.
-
 All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
@@ -23,6 +8,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+
+- Keys-first chord arrangement generation: `window.chordr.generateChordArrangement()`
+  turns named harmony events into a playable two-hand keys part (`generateKeysArrangement`),
+  with slash-bass support, note durations (`lengthSeconds` for the arrangement's
+  total length, `defaultDuration` for the trailing chord), register clamps and
+  voice leading between changes. `{instrument: "guitar"}` instead generates
+  tuning-aware guitar shapes (`generateGuitarArrangement`), honouring `tuning`,
+  `stringCount`, `maxFret` and `isBass`.
+- Accept both audio detector `{t, name}` events and chart chord/template pairs
+  (`chordTemplates`, indexed by the event's `id`), so the generators work with
+  authored charts and the audio detector's events alike.
+- Add `generateAccompanimentFromLyrics(filename, options)`: a third
+  arrangement-generation path that harmonizes a song's sung melody (read
+  from lyrics_karaoke's canonical `/playback` payload) into a backing chord
+  sequence — key estimation via a Krumhansl-Schmuckler-style pitch-class
+  correlation, then a windowed best-fit diatonic triad per chord change —
+  and feeds it into the existing keys/guitar generator. Covers a song whose
+  only harmonic information is its vocal line: no chord chart, no full-mix
+  audio worth chord-detecting.
 
 - `window.chordr.getChartTransformStatus()` reports whether the
   `chart-transform` provider is registered and currently selected on this

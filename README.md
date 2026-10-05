@@ -45,14 +45,19 @@ window.chordr.identifyChord(chordNotes, {
   isBass,
 });
 window.chordr.identifyPianoChord(midiNotes);
+window.chordr.parseChordName("Cmin7/E"); // { root, bass, quality, intervals, pitchClasses } | null
 window.chordr.generateChordArrangement(chords, {
-  instrument: "keys", // default; or "guitar"
-  duration: 180,
-  chordTemplates,
+  instrument: "keys", // default; or "guitar" / "acoustic" / "electric"
+  lengthSeconds: 180, // total arrangement length; the trailing chord fills the remainder
+  defaultDuration: 2, // seconds the trailing chord lasts without a lengthSeconds
+  chordTemplates, // names for chart events that carry only an id
+  tuning, capo, stringCount, maxFret, isBass, // guitar shapes
 });
+window.chordr.generateKeysArrangement(chords, options); // keys-only entry point
+window.chordr.generateGuitarArrangement(chords, options); // guitar-only entry point
 await window.chordr.generateArrangementFromAudio(audioUrl, {
   instrument: "keys",
-  duration: 180,
+  lengthSeconds: 180,
 });
 await window.chordr.generateAccompanimentFromLyrics(filename, {
   instrument: "keys", // default; or "guitar"
@@ -80,16 +85,48 @@ set does not match a supported chord quality. See `CHORD_QUALITIES` in
 is the default and primary output: each note is `{t, midi, sus, hand}` with a
 compact right-hand voicing, a left-hand root/slash bass, and voice leading
 between changes. `{instrument: "guitar"}` instead returns `{t, s, f, sus}`
-notes plus the selected fret shapes. Chart chords without an inline `name` can
-use `options.chordTemplates` (their `id` indexes that array), so the API works
-with authored charts and the audio detector's named events alike. The function
-does not mutate its inputs.
+notes plus the selected fret shapes in `shapes`, searched against the open
+strings that `tuning`/`stringCount`/`isBass` describe — `isBass: true` searches
+a 4/5-string bass's fifths rather than the low six guitar strings, so its frets
+decode back to the chord that was asked for. Chart chords without an inline
+`name` can use `options.chordTemplates` (their `id` indexes that array), so the
+API works with authored charts and the audio detector's named events alike. The
+function does not mutate its inputs.
+
+Every note lasts until the next onset, so nothing has to be tuned for the
+voicing to be musical; the only length options concern the trailing chord.
+`lengthSeconds` is the arrangement's *total* length, so a final chord that
+starts early is held until then — that is what fills out a track whose last
+detected chord is short. `defaultDuration` (2s by default) is that trailing
+chord's own length and its floor, so a `lengthSeconds` below the last onset
+extends nothing rather than collapsing the final note.
 
 The result is deliberately an arrangement payload rather than an automatic
 `chart-transform`: the host transform contract can replace notes but cannot
 change instrument type or create a new arrangement. An editor/importer should
 materialize this payload as a separate Keys or Guitar arrangement, leaving the
-song's original part intact.
+song's original part intact — and note that the two payloads are not the same
+thing on the wire. The guitar notes are *already* wire notes (`{t, s, f, sus}`,
+feedpak-spec §6.2); the keys notes are not. `{t, midi, sus, hand}` has to be
+converted first, because a keys/keys arrangement reuses `s`/`f` for a 24-semitone
+MIDI bucket (`midi = s * 24 + f`) rather than a string index and fret:
+
+```js
+const wireNotes = notes.map((n) => ({
+  t: n.t,
+  s: Math.floor(n.midi / 24),
+  f: n.midi % 24,
+  sus: n.sus,
+}));
+```
+
+Write the payload verbatim and every note decodes as `null`, leaving a
+silently unidentifiable part — the chordr#19 failure mode, in reverse.
+`hand` has no wire field at all: it is a rendering hint (which hand plays the
+note), so keep it in your own copy or drop it. The generator's register clamps
+keep `f` under 24. Chordr reads that encoded form back through
+`identifyChord(notes, { isPiano: true })` and `identifyPianoChord`, and
+feedBack-plugin-piano claims keys arrangements by the same pattern.
 
 `generateArrangementFromAudio(audioUrl, options)` is the end-to-end fallback
 for a song with no authored piano part: it runs Chordr's existing audio chord
@@ -221,13 +258,6 @@ neighbors) into chord segments.
 ## Tests
 
 ```bash
-node tests/chord_analysis.test.js
-node tests/generate_chord_templates.test.js
-node tests/generate_arrangement.test.js
-node tests/generate_accompaniment_from_lyrics.test.js
-node tests/build_lyric_lines.test.js
-node tests/chord_lyrics_view.test.js
-python3 -m unittest tests/test_audio_chords.py
 node --test tests/*.test.js
 python3 -m pip install -r tests/requirements.txt
 python3 -m unittest discover -s tests -p 'test_*.py'
