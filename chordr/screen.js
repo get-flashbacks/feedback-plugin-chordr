@@ -1121,7 +1121,7 @@ if (!window[`__${PLUGIN_ID}_installed`]) {
     if (!payload || payload.schema_version !== 1 || !Array.isArray(payload.voices)) return null;
     const voice = payload.voices.find((v) => v && v.primary) || payload.voices[0];
     const tokens = (voice && Array.isArray(voice.tokens) ? voice.tokens : [])
-      .filter((t) => Number.isFinite(t.midi) && Number.isFinite(t.start) && Number.isFinite(t.duration) && t.duration >= 0)
+      .filter((t) => t && Number.isFinite(t.midi) && Number.isFinite(t.start) && Number.isFinite(t.duration) && t.duration >= 0)
       .sort((a, b) => a.start - b.start);
     if (!tokens.length) return null; // lyrics-only track: nothing to harmonize from
 
