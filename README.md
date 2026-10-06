@@ -153,6 +153,7 @@ progression that was actually played. Returns `null` when there is nothing
 to harmonize from: the lyrics_karaoke route is unavailable or 404s, the
 track is lyrics-only (no `midi` on any token), or the response's
 `schema_version` isn't the one this function understands.
+
 `groupChordEvents` returns a `{ parentIndex, continuation }` entry for every
 chord event. A nonempty event whose played `{s,f}` notes are a subset of the
 active preceding full chord retains that full chord's parent index, including
