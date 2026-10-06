@@ -357,22 +357,24 @@ if (!window[`__${PLUGIN_ID}_installed`]) {
   // memoizes the winner per chord + instrument setup: this search dominates
   // the guitar path's cost, and a song repeats each chord symbol many times.
   function _bestGuitarShape(chord, options, shapeCache) {
-    const stringCount = Number(options.stringCount) || 6;
+    const stringCount = Number(options.stringCount) || (options.tuning && options.tuning.length) || 6;
     const tuning = options.tuning && options.tuning.length ? options.tuning : new Array(stringCount).fill(0);
     const isBass = !!options.isBass;
+    const capo = Number(options.capo) || 0;
     // Search against the base the HOST decodes with (see
     // baseOpenStringMidis): a 4/5-string bass reads fifths, not the low six
     // guitar strings, so frets chosen against the guitar base sound a
-    // different chord for a bass part. `capo` is added by the host on top of
-    // base+tuning+fret, so the search stays capo-relative.
+    // different chord for a bass part. `capo` shifts all strings uniformly
+    // (base + tuning + capo + fret), so fold it into the search to match
+    // the decode path exactly.
     const base = baseOpenStringMidis(stringCount, isBass);
     const maxFret = Math.max(3, Math.min(15, Number(options.maxFret) || 8));
     const wanted = new Set(chord.pitchClasses);
-    const cacheKey = `${chord.pitchClasses.join(",")}/${chord.bass}/${stringCount}/${isBass}/${maxFret}/${tuning.join(",")}`;
+    const cacheKey = `${chord.pitchClasses.join(",")}/${chord.bass}/${stringCount}/${isBass}/${maxFret}/${capo}/${tuning.join(",")}`;
     if (shapeCache && shapeCache.has(cacheKey)) return shapeCache.get(cacheKey);
     const choices = [];
     for (let s = 0; s < stringCount; s++) {
-      const open = (base[s] ?? base.at(-1)) + Number(tuning[s] || 0);
+      const open = (base[s] ?? base.at(-1)) + Number(tuning[s] || 0) + capo;
       const frets = [-1];
       for (let f = 0; f <= maxFret; f++) if (wanted.has((open + f) % 12)) frets.push(f);
       choices.push(frets);
