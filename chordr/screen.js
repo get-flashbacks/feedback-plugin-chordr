@@ -995,8 +995,9 @@ if (!window[`__${PLUGIN_ID}_installed`]) {
   const KK_MINOR_PROFILE = [6.33, 2.68, 3.52, 5.38, 2.60, 3.53, 2.54, 4.75, 3.98, 2.69, 3.34, 3.17];
 
   // Diatonic triads by scale degree (root offset in semitones from tonic,
-  // quality suffix matching CHORD_QUALITIES). Degree seven is the
-  // half-diminished/diminished triad in both modes' natural form.
+  // quality suffix matching CHORD_QUALITIES). Major degree 7 is the
+  // diminished triad; minor degree 7 is the major triad on the flattened
+  // seventh (VII), and the natural-minor diminished triad is on degree 2.
   const MAJOR_DEGREE_TRIADS = [
     { offset: 0, suffix: "" }, { offset: 2, suffix: "m" }, { offset: 4, suffix: "m" },
     { offset: 5, suffix: "" }, { offset: 7, suffix: "" }, { offset: 9, suffix: "m" },
