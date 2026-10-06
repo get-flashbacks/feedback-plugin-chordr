@@ -254,6 +254,7 @@ if (!window[`__${PLUGIN_ID}_installed`]) {
     let suffix = (match[3] || "").trim();
     const aliases = {
       min: "m", minor: "m", maj: "", major: "", M: "",
+      M7: "maj7", M9: "maj9", M6: "6",
       "Δ": "maj7", "Δ7": "maj7", min7: "m7", "m7♭5": "m7b5",
       "°": "dim", "°7": "dim7", "+": "aug",
     };
