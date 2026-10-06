@@ -116,6 +116,29 @@ test('guitar shapes decode back to the requested chord for a bass part', () => {
   }
 });
 
+test('guitar shapes decode back to the requested chord under a capo', () => {
+  const chordr = freshPlugin();
+  // `capo` shifts every string's sounding pitch, so the shape search has to
+  // search and validate against the same shifted pitch. Validating against the
+  // unshifted one left every non-multiple-of-12 capo producing no shape at all:
+  // the candidate list built frets the coverage check then rejected, and the
+  // empty result was silent because `sourceChords` stayed populated.
+  for (const capo of [0, 1, 2, 3, 5, 7, 12]) {
+    for (const name of ['C', 'Am', 'G', 'Dm7']) {
+      const label = `${name} at capo ${capo}`;
+      const result = chordr.generateGuitarArrangement([{ t: 0, name }], { instrument: 'guitar', capo });
+      assert.equal(result.shapes.length, 1, `${label} produced a shape`);
+
+      const identified = chordr.identifyChord(result.notes, {
+        capo, stringCount: 6, isBass: false, tuning: new Array(6).fill(0),
+      });
+      const wanted = chordr.parseChordName(name);
+      assert.ok(identified, `${label} decoded`);
+      assert.deepEqual(new Set(identified.pitchClasses), new Set(wanted.pitchClasses), `${label} pitch classes`);
+    }
+  }
+});
+
 test('a song of wide-tuning guitar chords does not block on the shape search', () => {
   const chordr = freshPlugin();
   const progression = ['C', 'Am', 'F', 'G', 'Cmaj9', 'Dm7'];

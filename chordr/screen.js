@@ -372,9 +372,15 @@ if (!window[`__${PLUGIN_ID}_installed`]) {
     const wanted = new Set(chord.pitchClasses);
     const cacheKey = `${chord.pitchClasses.join(",")}/${chord.bass}/${stringCount}/${isBass}/${maxFret}/${capo}/${tuning.join(",")}`;
     if (shapeCache && shapeCache.has(cacheKey)) return shapeCache.get(cacheKey);
+    // Open-string sounding pitch per string (base + tuning + capo) — the same
+    // expression `pitchFromBase` decodes with. The candidate list and the
+    // leaf's `sounding` below both read it from here, so a shift the search
+    // applies can't be left out of the coverage check that validates it.
+    const opens = [];
     const choices = [];
     for (let s = 0; s < stringCount; s++) {
       const open = (base[s] ?? base.at(-1)) + Number(tuning[s] || 0) + capo;
+      opens.push(open);
       const frets = [-1];
       for (let f = 0; f <= maxFret; f++) if (wanted.has((open + f) % 12)) frets.push(f);
       choices.push(frets);
@@ -394,7 +400,7 @@ if (!window[`__${PLUGIN_ID}_installed`]) {
         frets.reduce((n, f) => n + Math.max(0, f), 0) * 0.08;
       if (best && floor >= best.score) return;
       if (s === choices.length) {
-        const sounding = frets.map((f, idx) => f < 0 ? null : (base[idx] ?? base.at(-1)) + Number(tuning[idx] || 0) + f).filter(Number.isFinite);
+        const sounding = frets.map((f, idx) => f < 0 ? null : opens[idx] + f).filter(Number.isFinite);
         if (sounding.length < Math.min(3, chord.pitchClasses.length)) return;
         const covered = new Set(sounding.map((m) => m % 12));
         if (!chord.pitchClasses.every((pc) => covered.has(pc))) return;
