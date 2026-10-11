@@ -128,7 +128,7 @@ before assuming a given host can run it.
 ## Testing
 
 ```bash
-node --test tests/*.test.js                                             # 106 pass
+node --test tests/*.test.js                                             # 107 pass
 python3 -m pip install -r tests/requirements.txt
 python3 -m unittest discover -s tests -p 'test_*.py'                    # 20 pass
 ```

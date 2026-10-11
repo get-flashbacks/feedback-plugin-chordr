@@ -212,6 +212,20 @@ test('an explicit event end stops a chord before the next onset', () => {
   assert.deepEqual([...new Set(sus(10))], [1]);
 });
 
+test('an explicit event end shorter than 100 ms is honored, not floored', () => {
+  const chordr = freshPlugin();
+  const result = chordr.generateKeysArrangement([
+    { t: 0, name: 'C', end: 0.02 },
+    { t: 5, name: 'F', end: 5.02 },
+  ]);
+  const sus = (t) => [...new Set(result.notes.filter((n) => n.t === t).map((n) => n.sus))];
+
+  // A measured 20 ms run stays 20 ms: flooring it up to 100 ms would spill the
+  // chord into the rest that follows it.
+  assert.deepEqual(sus(0), [0.02]);
+  assert.ok(Math.abs(sus(5)[0] - 0.02) < 1e-9);
+});
+
 test('an explicit event end is not extended by lengthSeconds', () => {
   const chordr = freshPlugin();
   // No next onset and a lengthSeconds past the end: without honoring `end`

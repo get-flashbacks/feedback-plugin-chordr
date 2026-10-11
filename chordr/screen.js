@@ -306,7 +306,9 @@ if (!window[`__${PLUGIN_ID}_installed`]) {
   // window) instead stops there — that is what preserves an internal or
   // trailing rest instead of sustaining the chord across it. It is still
   // clamped to the next onset and to `lengthSeconds`, so a detected end
-  // can't overlap the next chord or outlive the arrangement.
+  // can't overlap the next chord or outlive the arrangement, but the 100 ms
+  // floor does not apply: a measured 20 ms run is 20 ms, not 100, or the
+  // chord would spill back into the rest the end exists to mark.
   function _eventDuration(events, index, options) {
     const event = events[index];
     const start = event.t;
@@ -314,16 +316,17 @@ if (!window[`__${PLUGIN_ID}_installed`]) {
     const fallback = Math.max(0.1, Number(options.defaultDuration) || 2);
     const length = Number(options.lengthSeconds);
     const explicitEnd = Number(event.end);
-    let end;
     if (Number.isFinite(explicitEnd) && explicitEnd > start) {
-      end = explicitEnd;
+      let end = explicitEnd;
       // Never past the next onset (a caller could hand us an overlapping
       // end) nor past `lengthSeconds` (the arrangement's own length).
       if (next && next.t < end) end = next.t;
       if (Number.isFinite(length) && length > start) end = Math.min(end, length);
-    } else {
-      end = next ? next.t : Math.max(start + fallback, Number.isFinite(length) ? length : 0);
+      // Honor the measured end exactly; flooring the duration up to 100 ms
+      // here would push a short segment back over the rest that follows it.
+      return end - start;
     }
+    const end = next ? next.t : Math.max(start + fallback, Number.isFinite(length) ? length : 0);
     return Math.max(0.1, end - start);
   }
 
