@@ -30,7 +30,7 @@ capability's presence at call time (`getattr(app.state,
 handle its absence: `difficulty_ladder` returns HTTP 503 (see above),
 `feedpakr` degrades to a warning and no-ops rather than failing the
 build. This plugin's `plugin.json` is
-currently at `0.6.0`; the chart-transform block has been declared in its
+currently at `0.6.1`; the chart-transform block has been declared in its
 current canonical shape since `0.2.0` (commit `084e1b2`). If you change
 what `chart-transform`/`analyze_chart_chords_v1` returns or how it's
 registered, both of those repos' consuming code needs to be checked, not
@@ -128,9 +128,9 @@ before assuming a given host can run it.
 ## Testing
 
 ```bash
-node --test tests/*.test.js                                             # 99 pass
+node --test tests/*.test.js                                             # 106 pass
 python3 -m pip install -r tests/requirements.txt
-python3 -m unittest discover -s tests -p 'test_*.py'                    # 18 pass
+python3 -m unittest discover -s tests -p 'test_*.py'                    # 20 pass
 ```
 
 The JS suite has no third-party dependencies. `test_chart_bridge.py`

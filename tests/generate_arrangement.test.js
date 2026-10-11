@@ -197,3 +197,60 @@ test('lengthSeconds holds the trailing chord out to the arrangement length', () 
   assert.equal(trailing({}), 2);
   assert.equal(trailing({ defaultDuration: 6 }), 6);
 });
+
+test('an explicit event end stops a chord before the next onset', () => {
+  const chordr = freshPlugin();
+  const result = chordr.generateKeysArrangement([
+    { t: 0, name: 'C', end: 1 },
+    { t: 10, name: 'F', end: 11 },
+  ]);
+  const sus = (t) => result.notes.filter((n) => n.t === t).map((n) => n.sus);
+
+  // Each chord stops at its own detected end, so the silent stretch between
+  // them (t=1..10) is a rest rather than being sustained over.
+  assert.deepEqual([...new Set(sus(0))], [1]);
+  assert.deepEqual([...new Set(sus(10))], [1]);
+});
+
+test('an explicit event end is not extended by lengthSeconds', () => {
+  const chordr = freshPlugin();
+  // No next onset and a lengthSeconds past the end: without honoring `end`
+  // the final note would be stretched to 60 to fill the arrangement.
+  const result = chordr.generateKeysArrangement([{ t: 0, name: 'C', end: 1 }], { lengthSeconds: 60 });
+  assert.deepEqual([...new Set(result.notes.map((n) => n.sus))], [1]);
+});
+
+test('an explicit event end is capped at lengthSeconds and the next onset', () => {
+  const chordr = freshPlugin();
+  const sus = (result, t) => [...new Set(result.notes.filter((n) => n.t === t).map((n) => n.sus))];
+
+  // end past lengthSeconds: capped to the arrangement's length.
+  const cappedByLength = chordr.generateKeysArrangement([{ t: 0, name: 'C', end: 100 }], { lengthSeconds: 5 });
+  assert.deepEqual(sus(cappedByLength, 0), [5]);
+
+  // A caller-supplied end that overlaps the next onset can't produce an
+  // overlapping sustain — it stops at the next chord.
+  const overlapping = chordr.generateKeysArrangement([
+    { t: 0, name: 'C', end: 10 },
+    { t: 4, name: 'F', end: 8 },
+  ]);
+  assert.deepEqual(sus(overlapping, 0), [4]);
+  assert.deepEqual(sus(overlapping, 4), [4]);
+});
+
+test('generateArrangementFromAudio honors detected run ends', async () => {
+  const originalFetch = global.fetch;
+  global.fetch = async (url) => {
+    if (url === '/song.ogg') return { ok: true, blob: async () => ({ type: 'audio/ogg' }) };
+    return { ok: true, json: async () => ({ chords: [{ t: 0, name: 'F', end: 1 }, { t: 10, name: 'C', end: 11 }] }) };
+  };
+  try {
+    const chordr = freshPlugin();
+    const result = await chordr.generateArrangementFromAudio('/song.ogg', { lengthSeconds: 180 });
+    const sus = (t) => [...new Set(result.notes.filter((n) => n.t === t).map((n) => n.sus))];
+    assert.deepEqual(sus(0), [1]);
+    assert.deepEqual(sus(10), [1]);
+  } finally {
+    global.fetch = originalFetch;
+  }
+});

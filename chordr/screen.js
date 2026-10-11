@@ -279,7 +279,15 @@ if (!window[`__${PLUGIN_ID}_installed`]) {
       const id = Number(event.id);
       const template = Array.isArray(templates) && Number.isInteger(id) ? templates[id] : null;
       const parsed = parseChordName(event.name || (template && template.name));
-      if (parsed) out.push({ t: Math.max(0, Number(event.t)), chord: parsed });
+      if (parsed) {
+        const norm = { t: Math.max(0, Number(event.t)), chord: parsed };
+        // Detection paths (audio runs, harmonized windows) carry the segment's
+        // own end so a rest before the next onset survives generation; authored
+        // chart chords have no `end` and keep the next-onset behavior.
+        const end = Number(event.end);
+        if (Number.isFinite(end)) norm.end = Math.max(norm.t, end);
+        out.push(norm);
+      }
     }
     out.sort((a, b) => a.t - b.t);
     // Multiple analysis frames can land at the same rounded onset. The last
@@ -293,12 +301,29 @@ if (!window[`__${PLUGIN_ID}_installed`]) {
   // that trailing chord's own length, and is also the floor for it: a
   // `lengthSeconds` below the last onset extends nothing rather than
   // collapsing the final note to a sliver.
+  //
+  // An event carrying an explicit `end` (a detected run or harmonized
+  // window) instead stops there — that is what preserves an internal or
+  // trailing rest instead of sustaining the chord across it. It is still
+  // clamped to the next onset and to `lengthSeconds`, so a detected end
+  // can't overlap the next chord or outlive the arrangement.
   function _eventDuration(events, index, options) {
-    const start = events[index].t;
+    const event = events[index];
+    const start = event.t;
     const next = events[index + 1];
     const fallback = Math.max(0.1, Number(options.defaultDuration) || 2);
     const length = Number(options.lengthSeconds);
-    const end = next ? next.t : Math.max(start + fallback, Number.isFinite(length) ? length : 0);
+    const explicitEnd = Number(event.end);
+    let end;
+    if (Number.isFinite(explicitEnd) && explicitEnd > start) {
+      end = explicitEnd;
+      // Never past the next onset (a caller could hand us an overlapping
+      // end) nor past `lengthSeconds` (the arrangement's own length).
+      if (next && next.t < end) end = next.t;
+      if (Number.isFinite(length) && length > start) end = Math.min(end, length);
+    } else {
+      end = next ? next.t : Math.max(start + fallback, Number.isFinite(length) ? length : 0);
+    }
     return Math.max(0.1, end - start);
   }
 
@@ -950,8 +975,10 @@ if (!window[`__${PLUGIN_ID}_installed`]) {
   // unnamed). Fetches the song's audio (same-origin regardless of source
   // format — sloppak/loose-folder/archive all resolve to a playable URL
   // via songInfo.audio_url) and uploads it to the backend's chroma-CQT +
-  // template-matching detector. Returns [{ t, name }, ...] or null on any
-  // failure — the view just has no chords for this song, same as today.
+  // template-matching detector. Returns [{ t, name, end }, ...] or null on
+  // any failure — the view just has no chords for this song, same as today.
+  // `end` is the detected run's own end, so a rest before the next chord is
+  // preserved rather than sustained over.
   const detectChordsFromAudio = async (audioUrl) => {
     if (!audioUrl || typeof fetch === "undefined") return null;
     try {
@@ -1095,7 +1122,12 @@ if (!window[`__${PLUGIN_ID}_installed`]) {
       });
       const chosen = triads[bestIdx];
       const name = (NOTE_NAMES_SHARP[chosen.root] || "C") + chosen.suffix;
-      chords.push({ t: winStart, name });
+      // Carry the window's end so a silent window between two sung windows
+      // stays a rest: the chord stops at its own window boundary rather than
+      // being sustained to the next chord's onset. The final window is capped
+      // at `lastEnd` so the accompaniment stops where the melody does instead
+      // of filling the trailing silence out to the window edge.
+      chords.push({ t: winStart, name, end: Math.min(winEnd, lastEnd) });
       lastChosen = bestIdx;
     }
     return chords;
