@@ -1,7 +1,7 @@
 {
   "id": "chordr",
   "name": "Chordr",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "description": "Derives chords and generates playable keys/guitar arrangements from chart data, audio analysis, or a sung melody — a shared capability other plugins consume rather than duplicating chord logic themselves.",
   "category": "tools",
   "type": "utility",

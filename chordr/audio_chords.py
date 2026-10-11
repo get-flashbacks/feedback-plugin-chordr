@@ -156,10 +156,14 @@ def detect_chords_from_chroma(chroma, times, min_run_seconds=0.5):
     frame, time-ordered. times: parallel list of frame onset times in
     seconds (same length as chroma).
 
-    Returns [{"t": float, "name": str}, ...] — one entry per detected
-    chord segment. Silence/unidentified stretches are omitted entirely,
-    the same convention the chart's own `chords` array uses (it only
-    lists actual chord events).
+    Returns [{"t": float, "name": str, "end": float}, ...] — one entry per
+    detected chord segment. `end` is the run's own end time (the next
+    frame's onset, so the last frame of the run is still covered, or one
+    frame past the last onset for a run that reaches the end of the
+    analysis), so a silent stretch before the next chord survives as a
+    rest instead of being sustained over. Silence/unidentified stretches
+    are still omitted entirely, the same convention the chart's own
+    `chords` array uses (it only lists actual chord events).
     """
     if not chroma or len(chroma) != len(times):
         return []
@@ -177,10 +181,15 @@ def detect_chords_from_chroma(chroma, times, min_run_seconds=0.5):
     runs = _smooth_labels(labels, min_run_frames)
 
     events = []
-    for label, start_idx, _end_idx in runs:
+    for label, start_idx, end_idx in runs:
         if label is None:
             continue
-        events.append({"t": times[start_idx], "name": label})
+        # end_idx is exclusive: the first frame of the next run (i.e. where
+        # this one stopped sounding). At the very end of the analysis there
+        # is no such frame, so extend one average frame past the last onset
+        # rather than dropping the final frame's worth of duration.
+        run_end = times[end_idx] if end_idx < len(times) else times[-1] + avg_frame_dur
+        events.append({"t": times[start_idx], "name": label, "end": run_end})
     return events
 
 

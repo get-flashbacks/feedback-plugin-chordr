@@ -114,5 +114,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   does) now decode `midi = s*24 + f` directly, and auto-generated chord
   templates for them no longer write a nonsense guitar fret diagram. Fixes
   a bug where an unnamed C major piano voicing was auto-named "D". (#19)
+- Generated accompaniments no longer sustain a chord across a detected
+  rest. Audio chord detection now carries each segment's own end
+  (`{"t", "name", "end"}`) and lyric harmonization carries each window's
+  end, and `generateChordArrangement` honors an event's explicit `end`
+  instead of always holding the chord until the next onset. Internal and
+  trailing silence in a detected run or a silent harmonization window
+  therefore stays a rest rather than being filled; authored chart chords
+  without an `end` keep the next-onset behavior. (#29)
 
 <!-- Add entries under Added, Changed, Deprecated, Removed, Fixed, or Security as changes land. -->

@@ -93,13 +93,22 @@ decode back to the chord that was asked for. Chart chords without an inline
 API works with authored charts and the audio detector's named events alike. The
 function does not mutate its inputs.
 
-Every note lasts until the next onset, so nothing has to be tuned for the
-voicing to be musical; the only length options concern the trailing chord.
+Every note lasts until the next onset (or its own explicit `end`), so nothing
+has to be tuned for the voicing to be musical; the only length options concern
+the trailing chord.
 `lengthSeconds` is the arrangement's *total* length, so a final chord that
 starts early is held until then — that is what fills out a track whose last
 detected chord is short. `defaultDuration` (2s by default) is that trailing
 chord's own length and its floor, so a `lengthSeconds` below the last onset
 extends nothing rather than collapsing the final note.
+
+An event may carry its own `end` (seconds), as the detection paths below
+emit for every segment they produce. When present it wins over the
+next-onset rule — the chord stops there, so a silent stretch before the next
+chord (or after the last one) survives as a rest instead of being sustained
+over. It is still capped at the next onset and at `lengthSeconds`, so a
+detected end can't overlap the next chord or outlive the arrangement.
+Authored chart chords without an `end` keep the next-onset behavior.
 
 The result is deliberately an arrangement payload rather than an automatic
 `chart-transform`: the host transform contract can replace notes but cannot
@@ -131,7 +140,10 @@ feedBack-plugin-piano claims keys arrangements by the same pattern.
 `generateArrangementFromAudio(audioUrl, options)` is the end-to-end fallback
 for a song with no authored piano part: it runs Chordr's existing audio chord
 detection and feeds those harmony events into the same keys-first generator.
-It returns `null` if audio detection fails.
+Each detected segment carries its own `end`, so internal and trailing
+silence become rests rather than being filled by sustained chords; a
+`lengthSeconds` no longer stretches the last detection to the end of the
+track. It returns `null` if audio detection fails.
 
 `generateAccompanimentFromLyrics(filename, options)` is a third generation
 path for a song whose only harmonic signal is its sung melody — a Vocals
@@ -147,7 +159,9 @@ windows (default 2) and picks whichever diatonic triad of that key best
 covers each window's notes. The resulting chord sequence is fed straight into
 `generateChordArrangement`, so the same `instrument`/voicing options apply,
 and the returned arrangement carries an extra `key: {root, mode}` field
-describing what was detected. This is melody harmonization, not chord
+describing what was detected. Each harmonized window carries its own `end`,
+so a window with no sung note is a rest rather than being filled, and the
+final window stops where the melody ends. This is melody harmonization, not chord
 detection — it invents a plausible backing, it does not recover a chord
 progression that was actually played. Returns `null` when there is nothing
 to harmonize from: the lyrics_karaoke route is unavailable or 404s, the
@@ -189,9 +203,11 @@ the same parsing.
 
 `detectChordsFromAudio(audioUrl)` fetches the audio at `audioUrl` and
 POSTs it to this plugin's own `/api/plugins/chordr/detect_chords` route
-for chroma-based detection, returning `[{ t, name }, ...]` or `null` on
+for chroma-based detection, returning `[{ t, name, end }, ...]` or `null` on
 any failure (network error, no audio, detection failed — the caller just
-has no chords for that song, same as a chart with none). The chord/lyrics
+has no chords for that song, same as a chart with none). `end` is the
+detected segment's own end time, so a caller can preserve the rest before
+the next chord rather than sustaining over it. The chord/lyrics
 view calls it automatically as a fallback; exposed for any other
 lyrics/chord-consuming plugin that wants the same source.
 
@@ -244,8 +260,8 @@ guarding on the nonexistent `songInfo.filename`) is fixed — see CHANGELOG's
 
 `POST /api/plugins/chordr/detect_chords` — body is the raw audio bytes
 (any format `librosa`/`soundfile` can decode: mp3, ogg, wav, flac).
-Returns `{"chords": [{"t": <seconds>, "name": <chord name>}, ...]}`, or
-a 4xx/5xx with `{"error": "..."}` on a bad/oversized body, missing
+Returns `{"chords": [{"t": <seconds>, "name": <chord name>, "end": <seconds>}, ...]}`,
+or a 4xx/5xx with `{"error": "..."}` on a bad/oversized body, missing
 `librosa`, or a decode/analysis failure. Detection
 (`chordr/audio_chords.py`): `librosa.feature.chroma_cqt` per ~0.2s
 analysis frame, each frame matched against a binary chord-quality

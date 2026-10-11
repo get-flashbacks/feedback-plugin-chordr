@@ -165,6 +165,37 @@ class DetectChordsFromChromaTests(unittest.TestCase):
         self.assertEqual([e["name"] for e in events], ["C"])
         self.assertEqual(events[0]["t"], times[5])
 
+    def test_run_end_marks_internal_silence_as_a_rest(self):
+        c_major = chroma_for(0, 4, 7)
+        silence = [0.0] * 12
+        chroma = [c_major] * 5 + [silence] * 5 + [c_major] * 5
+        times = [i * 0.2 for i in range(15)]
+
+        events = audio_chords.detect_chords_from_chroma(chroma, times, min_run_seconds=0.5)
+
+        self.assertEqual([e["name"] for e in events], ["C", "C"])
+        self.assertEqual(events[0]["t"], times[0])
+        # The first run stops where the silent stretch begins, so the gap up
+        # to the second run's onset survives as a rest rather than being
+        # sustained over.
+        self.assertEqual(events[0]["end"], times[5])
+        self.assertEqual(events[1]["t"], times[10])
+        # The final run runs to one average frame past its last onset (there
+        # is no next frame to read the end from).
+        self.assertEqual(events[1]["end"], times[-1] + 0.2)
+
+    def test_run_end_preserves_trailing_silence(self):
+        c_major = chroma_for(0, 4, 7)
+        silence = [0.0] * 12
+        chroma = [c_major] * 5 + [silence] * 5
+        times = [i * 0.2 for i in range(10)]
+
+        events = audio_chords.detect_chords_from_chroma(chroma, times, min_run_seconds=0.5)
+
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]["end"], times[5])
+        self.assertLess(events[0]["end"], times[-1])
+
     def test_returns_empty_list_for_empty_input(self):
         self.assertEqual(audio_chords.detect_chords_from_chroma([], []), [])
 

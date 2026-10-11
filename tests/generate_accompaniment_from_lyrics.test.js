@@ -113,6 +113,45 @@ test('harmonizes a C major melody into a diatonic keys accompaniment', async () 
   assert.ok(result.notes.length > 0);
 });
 
+test('does not sustain a chord across silent windows', async () => {
+  const chordr = freshPlugin();
+  // The issue's repro: two short pitched notes ten seconds apart. Every
+  // window between them is empty, so the first chord must stop at its own
+  // window boundary rather than being held until the next onset.
+  const tokens = [
+    { start: 0, duration: 1, text: 'la', midi: 60 },
+    { start: 10, duration: 1, text: 'la', midi: 60 },
+  ];
+  const payload = { schema_version: 1, voices: [{ id: 'primary', primary: true, tokens }] };
+
+  const result = await withFetch(
+    async () => ({ ok: true, json: async () => payload }),
+    () => chordr.generateAccompanimentFromLyrics('song.sloppak', { windowSeconds: 2 }),
+  );
+
+  assert.ok(result);
+  assert.deepEqual(result.sourceChords.map((c) => c.t), [0, 10]);
+  const firstSus = [...new Set(result.notes.filter((n) => n.t === 0).map((n) => n.sus))];
+  assert.deepEqual(firstSus, [2]); // one window long, not 10
+  assert.deepEqual(result.notes.filter((n) => n.t > 0 && n.t < 10), []);
+});
+
+test('stops the accompaniment where the melody ends (trailing silence)', async () => {
+  const chordr = freshPlugin();
+  const tokens = [{ start: 0, duration: 1, text: 'la', midi: 60 }];
+  const payload = { schema_version: 1, voices: [{ id: 'primary', primary: true, tokens }] };
+
+  const result = await withFetch(
+    async () => ({ ok: true, json: async () => payload }),
+    () => chordr.generateAccompanimentFromLyrics('song.sloppak', { windowSeconds: 2 }),
+  );
+
+  assert.ok(result);
+  // The melody ends at t=1, inside the 2s window — the chord stops there
+  // instead of filling the window's trailing silence.
+  assert.deepEqual([...new Set(result.notes.map((n) => n.sus))], [1]);
+});
+
 test('falls back to the first voice when no voice is marked primary', async () => {
   const chordr = freshPlugin();
   const tokens = tokensFor([60, 64, 67], { startAt: 0, duration: 0.5 });
