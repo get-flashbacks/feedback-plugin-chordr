@@ -165,8 +165,14 @@ final window stops where the melody ends. This is melody harmonization, not chor
 detection — it invents a plausible backing, it does not recover a chord
 progression that was actually played. Returns `null` when there is nothing
 to harmonize from: the lyrics_karaoke route is unavailable or 404s, the
-track is lyrics-only (no `midi` on any token), or the response's
-`schema_version` isn't the one this function understands.
+track is lyrics-only (no `midi` on any token), the response's
+`schema_version` isn't the one this function understands, or the melody's
+timeline falls outside the supported song bounds — a summed endpoint
+`start + duration` that overflows (both fields can be finite yet sum to
+Infinity) or a span past the 15-minute song horizon (the same bound the
+audio path applies). Out-of-bound melodies are rejected rather than
+truncated, since either case would otherwise mean iterating one
+synchronous window per slice of the whole span on the page's main thread.
 
 `groupChordEvents` returns a `{ parentIndex, continuation }` entry for every
 chord event. A nonempty event whose played `{s,f}` notes are a subset of the

@@ -1091,6 +1091,22 @@ if (!window[`__${PLUGIN_ID}_installed`]) {
     });
   }
 
+  // Supported song horizon for a melody to harmonize, sharing the 15-minute
+  // bound routes.py's MAX_AUDIO_DURATION_SECONDS applies to audio. Unlike
+  // that cap (which truncates the loaded audio), a melody past the horizon
+  // is rejected outright: the caller's "nothing to harmonize" null is more
+  // honest than silently dropping the tail, and anything longer is malformed
+  // or hostile — harmonizing it would iterate a window per slice of the whole
+  // span on the browser main thread.
+  const MAX_HARMONIZED_MELODY_SECONDS = 900.0;
+  // Hard cap on the number of windows per call, independent of the
+  // timestamps, so the main-thread loop can never iterate an impractical
+  // number of times even if the horizon or minimum windowSeconds ever change.
+  // It never binds today — the 900s horizon at the minimum 0.5s window is
+  // 1800 windows < 3000 — so it is defense-in-depth over the horizon check,
+  // not a second guard that can fire.
+  const MAX_HARMONY_WINDOWS = 3000;
+
   // Groups melody tokens into fixed windows and, per window, scores every
   // diatonic triad by how much of the window's (duration-weighted) melody
   // content it covers — the sung notes are treated as the thing the
@@ -1100,8 +1116,21 @@ if (!window[`__${PLUGIN_ID}_installed`]) {
   function _harmonizeMelody(tokens, windowSeconds, key) {
     const triads = _diatonicChords(key);
     const tonicIndex = 0;
-    const lastEnd = tokens.reduce((max, t) => Math.max(max, t.start + t.duration), 0);
-    const windowCount = Math.max(1, Math.ceil(lastEnd / windowSeconds));
+    // The endpoint is a SUM of the tokens' start/duration, so validating
+    // each field for finiteness is not enough: two finite values can still
+    // sum to Infinity ({start: 1e308, duration: 1e308}), which would make
+    // the window loop below run forever, and a large finite span still
+    // implies a window per slice of it. Validate the summed endpoint and
+    // bail out with no chords — the caller returns null for a melody that
+    // cannot be harmonized, the same graceful result a rest- or lyrics-only
+    // track already produces.
+    let lastEnd = 0;
+    for (const t of tokens) {
+      const end = t.start + t.duration;
+      if (!Number.isFinite(end) || end > MAX_HARMONIZED_MELODY_SECONDS) return [];
+      if (end > lastEnd) lastEnd = end;
+    }
+    const windowCount = Math.min(MAX_HARMONY_WINDOWS, Math.max(1, Math.ceil(lastEnd / windowSeconds)));
     const chords = [];
     let lastChosen = -1;
     for (let w = 0; w < windowCount; w++) {
