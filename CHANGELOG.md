@@ -122,5 +122,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   trailing silence in a detected run or a silent harmonization window
   therefore stays a rest rather than being filled; authored chart chords
   without an `end` keep the next-onset behavior. (#29)
+- Lyric harmonization (`generateAccompanimentFromLyrics` →
+  `_harmonizeMelody`) no longer hangs the page on malformed vocal playback
+  timestamps. Each token field was already required to be finite, but the SUM
+  of two finite values can overflow to Infinity (`{start: 1e308, duration:
+  1e308}`), and a large finite span still implied one synchronous window per
+  slice of it on the browser main thread. The summed endpoint is now validated
+  for finiteness and against the 15-minute song horizon (the same bound the
+  audio path applies, though out-of-horizon melodies are rejected rather than
+  truncated), and the window loop is hard-capped regardless of timestamps —
+  out-of-range melodies return the same `null` "nothing to harmonize" result
+  as a rest-only or lyrics-only track. (#28)
 
 <!-- Add entries under Added, Changed, Deprecated, Removed, Fixed, or Security as changes land. -->

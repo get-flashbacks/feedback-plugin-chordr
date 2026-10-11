@@ -180,3 +180,72 @@ test('instrument option is honored end to end (guitar accompaniment)', async () 
   assert.equal(result.instrument, 'guitar');
   assert.ok(Array.isArray(result.shapes) && result.shapes.length > 0);
 });
+
+test('returns null for a melody endpoint that overflows to Infinity', { timeout: 2000 }, async () => {
+  const chordr = freshPlugin();
+  const payload = {
+    schema_version: 1,
+    voices: [{ id: 'primary', primary: true, tokens: [
+      // A normal token so that — without the finiteness check on the summed
+      // endpoint — a real chord would be produced and the null above it
+      // would not be attributable to an empty window grid.
+      { start: 0, duration: 1, text: 'la', midi: 60 },
+      // The issue's repro: each field is finite, but start + duration
+      // overflows the summed endpoint to Infinity. The old window loop
+      // iterated `w < Math.ceil(Infinity / windowSeconds)` forever — this
+      // test would hang instead of completing against that code.
+      { start: 1e308, duration: 1e308, text: 'la', midi: 60 },
+    ] }],
+  };
+
+  const result = await withFetch(
+    async () => ({ ok: true, json: async () => payload }),
+    () => chordr.generateAccompanimentFromLyrics('song.sloppak'),
+  );
+
+  assert.equal(result, null);
+});
+
+test('returns null for a very large but finite melody beyond the song horizon', { timeout: 2000 }, async () => {
+  const chordr = freshPlugin();
+  const payload = {
+    schema_version: 1,
+    voices: [{ id: 'primary', primary: true, tokens: [
+      { start: 0, duration: 1, text: 'la', midi: 60 },
+      // Finite, so no overflow — but ~317 years is no song. Without the
+      // horizon check the old code synchronously iterated a window per
+      // slice of the whole span on the browser main thread (≈5 billion
+      // iterations here) instead of returning null.
+      { start: 1e10, duration: 1, text: 'la', midi: 60 },
+    ] }],
+  };
+
+  const result = await withFetch(
+    async () => ({ ok: true, json: async () => payload }),
+    () => chordr.generateAccompanimentFromLyrics('song.sloppak'),
+  );
+
+  assert.equal(result, null);
+});
+
+test('still harmonizes a long melody inside the supported song horizon', { timeout: 2000 }, async () => {
+  const chordr = freshPlugin();
+  const payload = {
+    schema_version: 1,
+    voices: [{ id: 'primary', primary: true, tokens: [
+      { start: 0, duration: 1, text: 'la', midi: 60 },
+      // Ends at 890s, inside the 900s horizon — must not be over-rejected
+      // as out-of-range by the same check that rejects the hostile spans
+      // above.
+      { start: 889, duration: 1, text: 'la', midi: 60 },
+    ] }],
+  };
+
+  const result = await withFetch(
+    async () => ({ ok: true, json: async () => payload }),
+    () => chordr.generateAccompanimentFromLyrics('song.sloppak', { windowSeconds: 2 }),
+  );
+
+  assert.ok(result);
+  assert.deepEqual(result.sourceChords.map((c) => c.t), [0, 888]);
+});
